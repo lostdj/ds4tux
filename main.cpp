@@ -324,6 +324,10 @@ u8 stopwatch_sec(u8 &initial)
 
 //
 #include "ext/json.h/json.h"
+//#pragma GCC diagnostic push
+//#pragma GCC diagnostic warning "-fpermissive"
+//#include "ext/json.h/json.c"
+//#pragma GCC diagnostic pop
 
 struct jstring
 {
@@ -1021,6 +1025,7 @@ struct ds4_device : public device
 
 		byte counter;
 		byte battery;
+//		byte battery2;
 		byte plug_usb;
 		byte plug_audio;
 		byte plug_mic;
@@ -1200,7 +1205,15 @@ struct ds4_device : public device
 		r.trackpad_touch1_active = (buf[39] >> 7) == 0;
 		r.trackpad_touch1_x = ((buf[41] & 0x0F) << 8) | buf[40];
 		r.trackpad_touch1_y = buf[42] << 4 | ((buf[41] & 0xF0) >> 4);
-		r.counter = (buf[7] >> 2);
+		r.counter = buf[7] >> 2;
+		r.battery = buf[30] % 16;
+		if(devinfo.usb)
+			r.battery = (r.battery - 16) * 10;
+		else
+			r.battery = (r.battery +1) * 10;
+		if(r.battery > 100)
+			r.battery = 100;
+//		r.battery2 = buf[12];
 		r.plug_usb = (buf[30] & 16) != 0;
 		r.plug_audio = (buf[30] & 32) != 0;
 		r.plug_mic = (buf[30] & 64) != 0;
@@ -1229,14 +1242,6 @@ struct ds4_device : public device
 		if(prev.share != r.share || prev.options != r.options || prev.trackpad != r.trackpad || prev.ps != r.ps)
 			std::cout << "S: " << (int)r.share << " O: " << (int)r.options << " T: " << (int)r.trackpad << " P: " << (int)r.ps << std::endl;
 
-		if(!(r.counter ))
-		if(prev.motion_y != r.motion_y || prev.motion_x != r.motion_x || prev.motion_z != r.motion_z)
-			std::cout << "my: " << (int)r.motion_y << " mx: " << (int)r.motion_x << " mz: " << (int)r.motion_z << std::endl;
-
-		if(!(r.counter ))
-		if(prev.orientation_roll != r.orientation_roll || prev.orientation_yaw != r.orientation_yaw || prev.orientation_pitch != r.orientation_pitch)
-			std::cout << "roll: " << (int)r.orientation_roll << " yaw: " << (int)r.orientation_yaw << " pitch: " << (int)r.orientation_pitch << std::endl;
-
 		if(prev.trackpad_touch0_id != r.trackpad_touch0_id || prev.trackpad_touch0_active != r.trackpad_touch0_active || prev.trackpad_touch0_x != r.trackpad_touch0_x || prev.trackpad_touch0_y != r.trackpad_touch0_y)
 			std::cout << "t0.id: " << (int)r.trackpad_touch0_id << " t0.a: " << (int)r.trackpad_touch0_active << " t0.x: " << (int)r.trackpad_touch0_x << " t0.y: " << (int)r.trackpad_touch0_y << std::endl;
 
@@ -1246,8 +1251,8 @@ struct ds4_device : public device
 		if(prev.plug_usb != r.plug_usb || prev.plug_audio != r.plug_audio || prev.plug_mic != r.plug_mic)
 			std::cout << "usb: " << (int)r.plug_usb << " aud: " << (int)r.plug_audio << " mic: " << (int)r.plug_mic << std::endl;
 
-		if(!(r.counter ))
-		std::cout << " batt1: " << (int)(buf[30] % 16) << " batt2: " << (int)buf[12] << std::endl;
+		if(prev.battery != r.battery/* || prev.battery2 != r.battery2*/)
+			std::cout << " batt1: " << (int)r.battery /*<< " batt2: " << (int)r.battery2*/ << std::endl;
 
 		prev = r;
 
@@ -1256,7 +1261,41 @@ struct ds4_device : public device
 
 	void control()
 	{
-		;
+		byte pkt[77];
+
+		int offset;
+		byte report_id;
+		if(devinfo.usb)
+		{
+			offset = 0;
+			report_id = 0x05;
+			pkt[0] = 0xFF;
+		}
+		else
+		{
+			offset = 2;
+			report_id = 0x11;
+			pkt[0] = 128;
+			pkt[2] = 0xFF;
+		}
+
+		// Small and big rumble, max 255.
+		pkt[offset + 3] = 0;
+		pkt[offset + 4] = 0;
+
+		// LED RGB.
+		pkt[offset + 5] = 1;
+		pkt[offset + 6] = 1;
+		pkt[offset + 7] = 10;
+
+		// Flash on and off duration, where 255 = 2.5s.
+		pkt[offset + 8] = 50;
+		pkt[offset + 9] = 255;
+
+		if(devinfo.usb)
+			write_report(report_id, pkt, 31);
+		else
+			write_report(report_id, pkt, 77);
 	}
 
 	void destroy()
@@ -1463,6 +1502,10 @@ struct ds4tux : public initialized_helper
 				}
 
 				devices.insert({{d->id(), d}});
+
+				d->init();
+				sleep_ms(500);
+				d->control();
 			};
 
 		myudev::on_dev_change_sig drem =
@@ -1491,7 +1534,7 @@ struct ds4tux : public initialized_helper
 		md.poll(dadd, drem);
 
 		for(auto i = devices.begin(); i != devices.end();)
-			if(!i->second->init())
+			if(!i->second->init() || i->second->destroyed())
 				delete i->second, i = devices.erase(i);
 			else
 			{
