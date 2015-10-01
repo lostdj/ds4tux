@@ -31,13 +31,52 @@ THE SOFTWARE.
 const char config_default[] = R"biteme!(
 
 {
+	'comment': 'TODO: Daemon, log redirect.',
+
 	'comment': 'Ordered list of configs, first-found-rest-ignored.',
 	'config_paths': ['~/.config/ds4tux.json'],
 
 	'comment': 'Check for config modification and automatically reload it.',
 	'config_reload': true,
 
-	'comment': 'TODO: Daemon, log redirect.'
+	'comment': 'List of enabled mappings defined below.',
+	'mappings': ['default', 'xbp'],
+
+	'comment': 'Ex. variable definition.',
+	'comment': 'DualShock 4 over USB.',
+	{'var': '$ds4_usb_masq':
+		{
+			'bus': 'BUS_USB', 'comment': "Actually this is ignored. It's always USB.",
+			'vendor': 1356,
+			'product': 1476,
+			'version': 273
+		}},
+
+	'comment': 'Xbox 360 controller.',
+	{'var': '$xbp_usb_masq':
+		{
+			'bus': 'BUS_USB',
+			'vendor': 1118,
+			'product': 654,
+			'version': 272
+		}},
+
+	'comment': 'Example default DS4 mapping.',
+	'mapping':
+	{
+		'name': 'default',
+
+		'comment': 'DS3 support, anyone?',
+		'for': 'ds4',
+
+		'comment': 'Pretend we are a real thing.',
+		'masquerade': {'ref': '$ds4_usb_masq'},
+
+		'when_do': ['l1 != l1', ['post', 'EV_KEY', 'BTN_Y', 'l1']],
+		'when_do': ['battery < 20', ['flash', 255, 0, 0, 5, 255]],
+		'when_do': ['l1=l1 & l2=l2',
+			['exec', 'echo "disconnect (%dev_mac%)" | bluetoothctl']]
+	}
 }
 
 )biteme!";
@@ -102,22 +141,58 @@ static_assert(sizeof(uw) == sizeof(void*), "szofword");
 	#define verbose(x)
 #endif
 
+//
+template<typename R, typename T>
+inline
+R scast(T t)
+{
+	return static_cast<R>(t);
+}
+
+template<typename R, typename T>
+inline
+R rcast(T t)
+{
+	return reinterpret_cast<R>(t);
+}
+
+//
+template <typename T, uw N>
+constexpr uw arrlen(T(&)[N])
+{
+	return N;
+}
+
+//
 bool streq(const char *s1, const char *s2)
 {
 	return std::strcmp(s1, s2) == 0;
 }
 
+bool strstarts(const char *src, const char *starts_with)
+{
+	return std::strncmp(src, starts_with, std::strlen(starts_with)) == 0;
+}
+
+//
 struct raii
 {
 	typedef std::function<void ()> fsig;
 
 	fsig f;
 
-	raii(fsig f) : f(f) {}
+	raii(fsig f) : f(f)
+	{
+		;
+	}
 
-	~raii() {f();}
+	~raii()
+	{
+		f();
+	}
 };
 
+//
 struct initialized_helper
 {
 	bool initialized()
@@ -145,106 +220,106 @@ private:
 	bool _destroyed = false;
 };
 
-namespace endian
+//
+template<bool convert>
+struct _endian
 {
-	template<bool convert>
-	class endian
+	static u1 swap(u1 v)
 	{
-	public:
-		static u1 swap(u1 v)
-		{
+		return v;
+	}
+
+	static s1 swap(s1 v)
+	{
+		return v;
+	}
+
+	static u2 swap(u2 v)
+	{
+		return !convert ? v :
+			(((v >> 8) & 0x00FF) |
+			 ((v << 8) & 0xFF00));
+	}
+
+	static s2 swap(s2 v)
+	{
+		return (s2)swap((u2)v);
+	}
+
+	static u4 swap(u4 v)
+	{
+		return !convert ? v :
+			(((v >> 24) & 0x000000FF) |
+			 ((v >>  8) & 0x0000FF00) |
+			 ((v <<  8) & 0x00FF0000) |
+			 ((v << 24) & 0xFF000000));
+	}
+
+	static s4 swap(s4 v)
+	{
+		return (s4)swap((u4)v);
+	}
+
+	static u8 swap(u8 v)
+	{
+		return !convert ? v :
+			(((u8)swap((u4)(v >> 32))) |
+			 ((u8)swap((u4)(v & 0xFFFFFFFF)) << 32));
+	}
+
+	static s8 swap(s8 v)
+	{
+		return (s8)swap((u8)v);
+	}
+
+	static f4 swap(f4 v)
+	{
+		if(!t(convert))
 			return v;
-		}
 
-		static s1 swap(s1 v)
-		{
+		f4 r;
+		byte *floatToConvert = (byte*)&v;
+		byte *returnFloat    = (byte*)&r;
+
+		returnFloat[0] = floatToConvert[3];
+		returnFloat[1] = floatToConvert[2];
+		returnFloat[2] = floatToConvert[1];
+		returnFloat[3] = floatToConvert[0];
+
+		return r;
+	}
+
+	static f8 swap(f8 v)
+	{
+		if(!t(convert))
 			return v;
-		}
 
-		static u2 swap(u2 v)
-		{
-			return !convert ? v :
-				(((v >> 8) & 0x00FF) |
-				 ((v << 8) & 0xFF00));
-		}
+		f8 r;
+		byte *floatToConvert = (byte*)&v;
+		byte *returnFloat    = (byte*)&r;
 
-		static s2 swap(s2 v)
-		{
-			return (s2)swap((u2)v);
-		}
+		returnFloat[0] = floatToConvert[7];
+		returnFloat[1] = floatToConvert[6];
+		returnFloat[2] = floatToConvert[5];
+		returnFloat[3] = floatToConvert[4];
+		returnFloat[4] = floatToConvert[3];
+		returnFloat[5] = floatToConvert[2];
+		returnFloat[6] = floatToConvert[1];
+		returnFloat[7] = floatToConvert[0];
 
-		static u4 swap(u4 v)
-		{
-			return !convert ? v :
-				(((v >> 24) & 0x000000FF) |
-				 ((v >>  8) & 0x0000FF00) |
-				 ((v <<  8) & 0x00FF0000) |
-				 ((v << 24) & 0xFF000000));
-		}
+		return r;
+	}
 
-		static s4 swap(s4 v)
-		{
-			return (s4)swap((u4)v);
-		}
+private:
+	// Workaround on "warning C4127: conditional expression is constant".
+	static bool t(bool v)
+	{
+		return v;
+	}
+};
 
-		static u8 swap(u8 v)
-		{
-			return !convert ? v :
-				(((u8)swap((u4)(v >> 32))) |
-				 ((u8)swap((u4)(v & 0xFFFFFFFF)) << 32));
-		}
-
-		static s8 swap(s8 v)
-		{
-			return (s8)swap((u8)v);
-		}
-
-		static f4 swap(f4 v)
-		{
-			if(!t(convert))
-				return v;
-
-			f4 r;
-			byte *floatToConvert = (byte*)&v;
-			byte *returnFloat    = (byte*)&r;
-
-			returnFloat[0] = floatToConvert[3];
-			returnFloat[1] = floatToConvert[2];
-			returnFloat[2] = floatToConvert[1];
-			returnFloat[3] = floatToConvert[0];
-
-			return r;
-		}
-
-		static f8 swap(f8 v)
-		{
-			if(!t(convert))
-				return v;
-
-			f8 r;
-			byte *floatToConvert = (byte*)&v;
-			byte *returnFloat    = (byte*)&r;
-
-			returnFloat[0] = floatToConvert[7];
-			returnFloat[1] = floatToConvert[6];
-			returnFloat[2] = floatToConvert[5];
-			returnFloat[3] = floatToConvert[4];
-			returnFloat[4] = floatToConvert[3];
-			returnFloat[5] = floatToConvert[2];
-			returnFloat[6] = floatToConvert[1];
-			returnFloat[7] = floatToConvert[0];
-
-			return r;
-		}
-
-	private:
-		// Workaround on "warning C4127: conditional expression is constant".
-		static bool t(bool v)
-		{
-			return v;
-		}
-	};
-
+struct endian
+{
 	#define _bo_be 0
 	#define _bo_le 0
 
@@ -271,18 +346,18 @@ namespace endian
 	#endif
 
 	// Always swap.
-	typedef endian<true> forced;
+	typedef _endian<true> forced;
 
 	// From BE to native.
-	typedef endian<(bool)_bo_le> frombe;
+	typedef _endian<(bool)_bo_le> frombe;
 	// From LE to native.
-	typedef endian<(bool)_bo_be> fromle;
+	typedef _endian<(bool)_bo_be> fromle;
 
 	// From native to BE.
-	typedef endian<(bool)_bo_le> tobe;
+	typedef _endian<(bool)_bo_le> tobe;
 	// From native to LE.
-	typedef endian<(bool)_bo_be> tole;
-}
+	typedef _endian<(bool)_bo_be> tole;
+};
 
 //
 #include <time.h>
@@ -324,10 +399,12 @@ u8 stopwatch_sec(u8 &initial)
 
 //
 #include "ext/json.h/json.h"
-//#pragma GCC diagnostic push
-//#pragma GCC diagnostic warning "-fpermissive"
-//#include "ext/json.h/json.c"
-//#pragma GCC diagnostic pop
+#ifndef DEV
+	#pragma GCC diagnostic push
+	#pragma GCC diagnostic warning "-fpermissive"
+	#include "ext/json.h/json.c"
+	#pragma GCC diagnostic pop
+#endif
 
 struct jstring
 {
@@ -482,7 +559,7 @@ struct json
 
 	bool obj_is(const char *name)
 	{
-		return is_object_elem() && string().string && streq(string(), name);
+		return is_object_elem() && string() && streq(string(), name);
 	}
 
 	bool obj_is(t value_type)
@@ -502,6 +579,16 @@ struct json
 	bool is_comment()
 	{
 		return obj_is("comment");
+	}
+
+	bool is_var_def()
+	{
+		return is_object_elem() && string() && string()[0] == '$';
+	}
+
+	bool is_var_ref()
+	{
+		return is_string() && string() && string()[0] == '$';
 	}
 
 	void p(bool comma = false, bool space = false)
@@ -629,7 +716,7 @@ struct myudev : public initialized_helper
 		(void)hid_path;
 
 		auto get_siblings =
-			[this](udev_device *hidraw, std::string clazz) -> udev_device*
+			[this](udev_device *hidraw, const char *clazz) -> udev_device*
 			{
 				udev_device *p = udev_device_get_parent_with_subsystem_devtype(
 					hidraw, "hid", null);
@@ -646,7 +733,7 @@ struct myudev : public initialized_helper
 					const char *sysfs_path = null;
 					udev_device *raw_dev = null;
 					const char *i_path = null;
-					std::string i_name;
+					const char *i_name;
 
 					udev_device *input_parent = null;
 
@@ -655,8 +742,8 @@ struct myudev : public initialized_helper
 					if(!raw_dev)
 						goto next_;
 
-					i_name = std::string(udev_device_get_sysname(raw_dev));
-					if(i_name.compare(0, clazz.size(), clazz))
+					i_name = udev_device_get_sysname(raw_dev);
+					if(strstarts(i_name, clazz))
 						goto next_;
 
 					input_parent = udev_device_get_parent_with_subsystem_devtype(
@@ -955,9 +1042,40 @@ struct uinput
 };
 
 //
+struct device_reading
+{
+	const char *const name;
+	const std::function<s4 (byte*)> reader;
+	s4 val = 0;
+	s4 prev = 0;
+
+	device_reading(const char *name, std::function<s4 (const byte *const)> reader)
+		: name(name), reader(reader)
+	{
+		;
+	}
+
+	s4 read(byte *buf)
+	{
+		prev = val;
+		val = reader(buf);
+
+		return val;
+	}
+
+private:
+	device_reading& operator=(device_reading const&);
+};
+
 struct device : public initialized_helper
 {
 	myudev::dev_info devinfo;
+
+	device()
+	{
+		devinfo = {false, false, 0, 0, std::string(""), std::string("")
+			, std::string(""), std::string(""), std::string(""), "", "", 0, 0};
+	}
 
 	device(myudev::dev_info devinfo)
 		: devinfo(devinfo)
@@ -965,9 +1083,38 @@ struct device : public initialized_helper
 		;
 	}
 
+	virtual bool init() = 0;
+	virtual device_reading& get_reading(uw index) = 0;
+	virtual void readings_iterate(std::function<bool (device_reading&, uw)> f) = 0;
+
+	sw reading_index(const char *name)
+	{
+		sw i = -1;
+
+		readings_iterate(
+			[&i, name](device_reading &d, uw index)
+			{
+				if(streq(d.name, name))
+				{
+					i = (sw)index;
+
+					return true;
+				}
+				else
+					return false;
+			});
+
+		return i;
+	}
+
 	std::string id()
 	{
 		return devinfo.dev_node;
+	}
+
+	virtual ~device()
+	{
+		;
 	}
 };
 
@@ -978,6 +1125,47 @@ struct ds4_device : public device
 	libevdev *eventdev = null;
 
 	byte *buf = null;
+
+	// I honestly did try to do this "more" in compile time,
+	// making device a variadic base data type and avoiding using macros.
+	// Oh well, good enough.
+	device_reading readings[34 /* Fuck you, C++. */] =
+	{
+		{"stick_left_x", [](const byte *const buf){return buf[1];}},
+		{"stick_left_y", [](const byte *const buf){return buf[2];}},
+		{"stick_right_x", [](const byte *const buf){return buf[3];}},
+		{"stick_right_y", [](const byte *const buf){return buf[4];}},
+		{"l2_analog", [](const byte *const buf){return buf[8];}},
+		{"r2_analog", [](const byte *const buf){return buf[9];}},
+		{"dpad_up", [](const byte *const buf){return buf[5] == 0 || buf[5] == 1 || buf[5] == 7;}},
+		{"dpad_down", [](const byte *const buf){return buf[5] == 3 || buf[5] == 4 || buf[5] == 5;}},
+		{"dpad_left", [](const byte *const buf){return buf[5] == 5 || buf[5] == 6 || buf[5] == 7;}},
+		{"dpad_right", [](const byte *const buf){return buf[5] == 1 || buf[5] == 2 || buf[5] == 3;}},
+		{"cross", [](const byte *const buf){return (buf[5] & 32) != 0;}},
+		{"circle", [](const byte *const buf){return (buf[5] & 64) != 0;}},
+		{"square", [](const byte *const buf){return (buf[5] & 16) != 0;}},
+		{"triangle", [](const byte *const buf){return (buf[5] & 128) != 0;}},
+		{"l1", [](const byte *const buf){return (buf[6] & 1) != 0;}},
+		{"l2", [](const byte *const buf){return (buf[6] & 4) != 0;}},
+		{"l3", [](const byte *const buf){return (buf[6] & 64) != 0;}},
+		{"r1", [](const byte *const buf){return (buf[6] & 2) != 0;}},
+		{"r2", [](const byte *const buf){return (buf[6] & 8) != 0;}},
+		{"r3", [](const byte *const buf){return (buf[6] & 128) != 0;}},
+		{"share", [](const byte *const buf){return (buf[6] & 16) != 0;}},
+		{"options", [](const byte *const buf){return (buf[6] & 32) != 0;}},
+		{"trackpad", [](const byte *const buf){return (buf[7] & 2) != 0;}},
+		{"ps", [](const byte *const buf){return (buf[7] & 1) != 0;}},
+		{"trackpad_touch0_id", [](const byte *const buf){return buf[35] & 0x7F;}},
+		{"trackpad_touch0_active", [](const byte *const buf){return (buf[35] >> 7) == 0;}},
+		{"trackpad_touch0_x", [](const byte *const buf){return ((buf[37] & 0x0F) << 8) | buf[36];}},
+		{"trackpad_touch0_y", [](const byte *const buf){return buf[38] << 4 | ((buf[37] & 0xF0) >> 4);}},
+		{"trackpad_touch1_id", [](const byte *const buf){return buf[39] & 0x7F;}},
+		{"trackpad_touch1_active", [](const byte *const buf){return (buf[39] >> 7) == 0;}},
+		{"trackpad_touch1_x", [](const byte *const buf){return ((buf[41] & 0x0F) << 8) | buf[40];}},
+		{"trackpad_touch1_y", [](const byte *const buf){return buf[42] << 4 | ((buf[41] & 0xF0) >> 4);}},
+		{"battery", [](const byte *const buf){return buf[30] % 16;}},
+		{"usb", [](const byte *const buf){return (buf[30] & 16) != 0;}},
+	};
 
 	struct report
 	{
@@ -1025,11 +1213,16 @@ struct ds4_device : public device
 
 		byte counter;
 		byte battery;
-//		byte battery2;
-		byte plug_usb;
-		byte plug_audio;
-		byte plug_mic;
+		byte battery2;
+		bool plug_usb;
+		bool plug_audio;
+		bool plug_mic;
 	};
+
+	ds4_device() : device()
+	{
+		;
+	}
 
 	ds4_device(myudev::dev_info devinfo)
 		: device(devinfo)
@@ -1037,7 +1230,19 @@ struct ds4_device : public device
 		;
 	}
 
-	bool init()
+	device_reading& get_reading(uw index) override
+	{
+		return readings[index];
+	}
+
+	void readings_iterate(std::function<bool (device_reading&, uw)> f) override
+	{
+		for(uw i = 0; i < arrlen(readings); i++)
+			if(f(readings[i], i))
+				break;
+	}
+
+	bool init() override
 	{
 		if(initialized() || destroyed())
 			return true;
@@ -1207,52 +1412,46 @@ struct ds4_device : public device
 		r.trackpad_touch1_y = buf[42] << 4 | ((buf[41] & 0xF0) >> 4);
 		r.counter = buf[7] >> 2;
 		r.battery = buf[30] % 16;
-		if(devinfo.usb)
-			r.battery = (r.battery - 16) * 10;
-		else
-			r.battery = (r.battery +1) * 10;
-		if(r.battery > 100)
-			r.battery = 100;
-//		r.battery2 = buf[12];
+		r.battery2 = buf[12];
 		r.plug_usb = (buf[30] & 16) != 0;
 		r.plug_audio = (buf[30] & 32) != 0;
 		r.plug_mic = (buf[30] & 64) != 0;
 
-		if(prev.left_analog_x != r.left_analog_x || prev.left_analog_y != r.left_analog_y)
-			std::cout << "LX: " << (int)r.left_analog_x << " LY: " << (int)r.left_analog_y << std::endl;
+//		if(prev.left_analog_x != r.left_analog_x || prev.left_analog_y != r.left_analog_y)
+//			std::cout << "LX: " << (int)r.left_analog_x << " LY: " << (int)r.left_analog_y << std::endl;
 
-		if(prev.right_analog_x != r.right_analog_x || prev.right_analog_y != r.right_analog_y)
-			std::cout << "RX: " << (int)r.right_analog_x << " RY: " << (int)r.right_analog_y << std::endl;
+//		if(prev.right_analog_x != r.right_analog_x || prev.right_analog_y != r.right_analog_y)
+//			std::cout << "RX: " << (int)r.right_analog_x << " RY: " << (int)r.right_analog_y << std::endl;
 
-		if(prev.l2_analog != r.l2_analog || prev.r2_analog != r.r2_analog)
-			std::cout << "L2A: " << (int)r.l2_analog << " R2A: " << (int)r.r2_analog << std::endl;
+//		if(prev.l2_analog != r.l2_analog || prev.r2_analog != r.r2_analog)
+//			std::cout << "L2A: " << (int)r.l2_analog << " R2A: " << (int)r.r2_analog << std::endl;
 
-		if(prev.dpad_up != r.dpad_up || prev.dpad_down != r.dpad_down || prev.dpad_left != r.dpad_left || prev.dpad_right != r.dpad_right)
-			std::cout << "U: " << (int)r.dpad_up << " D: " << (int)r.dpad_down << " L: " << (int)r.dpad_left << " R: " << (int)r.dpad_right << std::endl;
+//		if(prev.dpad_up != r.dpad_up || prev.dpad_down != r.dpad_down || prev.dpad_left != r.dpad_left || prev.dpad_right != r.dpad_right)
+//			std::cout << "U: " << (int)r.dpad_up << " D: " << (int)r.dpad_down << " L: " << (int)r.dpad_left << " R: " << (int)r.dpad_right << std::endl;
 
-		if(prev.cross != r.cross || prev.circle != r.circle || prev.square != r.square || prev.triangle != r.triangle)
-			std::cout << "X: " << (int)r.cross << " O: " << (int)r.circle << " Q: " << (int)r.square << " R: " << (int)r.triangle << std::endl;
+//		if(prev.cross != r.cross || prev.circle != r.circle || prev.square != r.square || prev.triangle != r.triangle)
+//			std::cout << "X: " << (int)r.cross << " O: " << (int)r.circle << " Q: " << (int)r.square << " R: " << (int)r.triangle << std::endl;
 
-		if(prev.l1 != r.l1 || prev.l2 != r.l2 || prev.l3 != r.l3)
-			std::cout << "L1: " << (int)r.l1 << " L2: " << (int)r.l2 << " L3: " << (int)r.l3 << std::endl;
+//		if(prev.l1 != r.l1 || prev.l2 != r.l2 || prev.l3 != r.l3)
+//			std::cout << "L1: " << (int)r.l1 << " L2: " << (int)r.l2 << " L3: " << (int)r.l3 << std::endl;
 
-		if(prev.r1 != r.r1 || prev.r2 != r.r2 || prev.r3 != r.r3)
-			std::cout << "R1: " << (int)r.r1 << " R2: " << (int)r.r2 << " R3: " << (int)r.r3 << std::endl;
+//		if(prev.r1 != r.r1 || prev.r2 != r.r2 || prev.r3 != r.r3)
+//			std::cout << "R1: " << (int)r.r1 << " R2: " << (int)r.r2 << " R3: " << (int)r.r3 << std::endl;
 
-		if(prev.share != r.share || prev.options != r.options || prev.trackpad != r.trackpad || prev.ps != r.ps)
-			std::cout << "S: " << (int)r.share << " O: " << (int)r.options << " T: " << (int)r.trackpad << " P: " << (int)r.ps << std::endl;
+//		if(prev.share != r.share || prev.options != r.options || prev.trackpad != r.trackpad || prev.ps != r.ps)
+//			std::cout << "S: " << (int)r.share << " O: " << (int)r.options << " T: " << (int)r.trackpad << " P: " << (int)r.ps << std::endl;
 
-		if(prev.trackpad_touch0_id != r.trackpad_touch0_id || prev.trackpad_touch0_active != r.trackpad_touch0_active || prev.trackpad_touch0_x != r.trackpad_touch0_x || prev.trackpad_touch0_y != r.trackpad_touch0_y)
-			std::cout << "t0.id: " << (int)r.trackpad_touch0_id << " t0.a: " << (int)r.trackpad_touch0_active << " t0.x: " << (int)r.trackpad_touch0_x << " t0.y: " << (int)r.trackpad_touch0_y << std::endl;
+//		if(prev.trackpad_touch0_id != r.trackpad_touch0_id || prev.trackpad_touch0_active != r.trackpad_touch0_active || prev.trackpad_touch0_x != r.trackpad_touch0_x || prev.trackpad_touch0_y != r.trackpad_touch0_y)
+//			std::cout << "t0.id: " << (int)r.trackpad_touch0_id << " t0.a: " << (int)r.trackpad_touch0_active << " t0.x: " << (int)r.trackpad_touch0_x << " t0.y: " << (int)r.trackpad_touch0_y << std::endl;
 
-		if(prev.trackpad_touch1_id != r.trackpad_touch1_id || prev.trackpad_touch1_active != r.trackpad_touch1_active || prev.trackpad_touch1_x != r.trackpad_touch1_x || prev.trackpad_touch1_y != r.trackpad_touch1_y)
-			std::cout << "t1.id: " << (int)r.trackpad_touch1_id << " t1.a: " << (int)r.trackpad_touch1_active << " t1.x: " << (int)r.trackpad_touch1_x << " t1.y: " << (int)r.trackpad_touch1_y << std::endl;
+//		if(prev.trackpad_touch1_id != r.trackpad_touch1_id || prev.trackpad_touch1_active != r.trackpad_touch1_active || prev.trackpad_touch1_x != r.trackpad_touch1_x || prev.trackpad_touch1_y != r.trackpad_touch1_y)
+//			std::cout << "t1.id: " << (int)r.trackpad_touch1_id << " t1.a: " << (int)r.trackpad_touch1_active << " t1.x: " << (int)r.trackpad_touch1_x << " t1.y: " << (int)r.trackpad_touch1_y << std::endl;
 
-		if(prev.plug_usb != r.plug_usb || prev.plug_audio != r.plug_audio || prev.plug_mic != r.plug_mic)
-			std::cout << "usb: " << (int)r.plug_usb << " aud: " << (int)r.plug_audio << " mic: " << (int)r.plug_mic << std::endl;
+		if(prev.plug_usb != r.plug_usb/* || prev.plug_audio != r.plug_audio || prev.plug_mic != r.plug_mic*/)
+			std::cout << "usb: " << (int)r.plug_usb /*<< " aud: " << (int)r.plug_audio << " mic: " << (int)r.plug_mic*/ << std::endl;
 
-		if(prev.battery != r.battery/* || prev.battery2 != r.battery2*/)
-			std::cout << " batt1: " << (int)r.battery /*<< " batt2: " << (int)r.battery2*/ << std::endl;
+		if(prev.battery != r.battery || prev.battery2 != r.battery2)
+			std::cout << "batt: " << ((r.battery * 100) / (r.plug_usb ? 11 : 9)) << "(" << (int)r.battery << ")" << " batt2: " << (int)r.battery2 << std::endl;
 
 		prev = r;
 
@@ -1284,12 +1483,12 @@ struct ds4_device : public device
 		pkt[offset + 4] = 0;
 
 		// LED RGB.
-		pkt[offset + 5] = 1;
-		pkt[offset + 6] = 1;
-		pkt[offset + 7] = 10;
+		pkt[offset + 5] = 50;
+		pkt[offset + 6] = 0;
+		pkt[offset + 7] = 0;
 
 		// Flash on and off duration, where 255 = 2.5s.
-		pkt[offset + 8] = 50;
+		pkt[offset + 8] = 5;
 		pkt[offset + 9] = 255;
 
 		if(devinfo.usb)
@@ -1300,7 +1499,7 @@ struct ds4_device : public device
 
 	void destroy()
 	{
-		if(destroyed())
+		if(!initialized() || destroyed())
 			return;
 
 		verbose(std::cout << "ds4_device.destroy() of " << devinfo.dev_node
@@ -1322,12 +1521,12 @@ struct ds4_device : public device
 			close(eventfd), eventfd = -1;
 
 		if(buf)
-			delete buf, buf = null;
+			delete[] buf, buf = null;
 
 		set_destroyed();
 	}
 
-	~ds4_device()
+	virtual ~ds4_device()
 	{
 		destroy();
 	}
@@ -1368,7 +1567,7 @@ struct ds4tux : public initialized_helper
 	//
 	myudev md;
 
-	std::unordered_map<std::string, ds4_device*> devices;
+	std::unordered_map<std::string, device*> devices;
 
 	//
 	void config_parse(json cfg)
@@ -1376,13 +1575,50 @@ struct ds4tux : public initialized_helper
 		if(cfg.is_null())
 			return;
 
+		std::unordered_map<std::string, json> vars;
+
+		auto get_var =
+			[&vars](json o) -> json
+			{
+				if(o.is_var_ref())
+					if(vars.count(std::string(o.string())))
+						return vars.at(std::string(o.string()));
+					else
+					{
+						std::cerr << "Can't find referenced var '" << o.string()
+							<< "'. Exiting.";
+
+						std::exit(1);
+					}
+				else
+					return o;
+			};
+
+		auto obj_is =
+			[&get_var](json &o, const char *name, json::t type) -> bool
+			{
+				if(!o.obj_is(name))
+					return false;
+
+				json var = get_var(o.payload());
+
+				return var.type == type || (type == json::t::t_bool && var.is_bool());
+			};
+
 		while(cfg.has_next())
 		{
 			cfg = cfg.next();
-			if(cfg.is_comment())
-				continue;
 
-			if(cfg.obj_is("config_paths", json::t_array))
+			if(cfg.is_comment())
+				;
+			elif(cfg.is_var_def())
+			{
+				if(vars.count(std::string(cfg.string())))
+					vars.erase(std::string(cfg.string()));
+
+				vars.insert({{std::string(cfg.string()), cfg.payload()}});
+			}
+			elif(obj_is(cfg, "config_paths", json::t_array))
 			{
 				configs.clear();
 
@@ -1394,8 +1630,10 @@ struct ds4tux : public initialized_helper
 						configs.push_back(std::string(a.payload().string()));
 				}
 			}
-			elif(cfg.obj_is("config_reload", json::t_bool))
+			elif(obj_is(cfg, "config_reload", json::t_bool))
 				config_reload = cfg.payload().is_true();
+//			elif(obj_is(cfg, "mapping", json::t_bool))
+//				std::cout << "Cool cool cool." << std::endl;
 		}
 
 //		std::cout << "---" << config_reload << std::endl;
@@ -1481,7 +1719,7 @@ struct ds4tux : public initialized_helper
 			};);
 
 		myudev::on_dev_change_sig dadd =
-			[&verbosedadd, this](myudev::dev_info di)
+			[&, this](myudev::dev_info di)
 			{
 				verbose(verbosedadd(di));
 
@@ -1509,7 +1747,7 @@ struct ds4tux : public initialized_helper
 			};
 
 		myudev::on_dev_change_sig drem =
-			[&verbosedrem, this](myudev::dev_info di)
+			[&, this](myudev::dev_info di)
 			{
 				verbose(verbosedrem(di));
 
@@ -1522,7 +1760,7 @@ struct ds4tux : public initialized_helper
 				if(!devices.count(d.id()))
 					return;
 
-				ds4_device *orig = devices.at(d.id());
+				device *orig = devices.at(d.id());
 				if(orig)
 				{
 					devices.erase(orig->id());
@@ -1538,7 +1776,7 @@ struct ds4tux : public initialized_helper
 				delete i->second, i = devices.erase(i);
 			else
 			{
-				i->second->read_report();
+//				((ds4_device*)i->second)->read_report();
 
 				++i;
 			}
@@ -1625,11 +1863,697 @@ char* process_args(int argc, const char **argv)
 	return args;
 }
 
+//
+#include <cctype>
+
+struct expr : public initialized_helper
+{
+	virtual s8 eval(device &d) = 0;
+
+	virtual ~expr()
+	{
+		set_destroyed();
+	}
+};
+
+struct expr_parser
+{
+	struct expr_anon : public expr
+	{
+		std::function<s8 (device&)> f;
+
+		expr_anon(std::function<s8 (device&)> f) : f(f)
+		{
+			;
+		}
+
+		s8 eval(device &d) override
+		{
+			return f(d);
+		}
+
+		virtual ~expr_anon()
+		{
+			set_destroyed();
+		}
+	};
+
+	struct expr_unary : public expr
+	{
+		expr &right;
+
+		std::function<s8 (expr &right, device&)> f;
+
+		expr_unary(expr &right, std::function<s8 (expr &right, device&)> f)
+			: right(right), f(f)
+		{
+			;
+		}
+
+		s8 eval(device &d) override
+		{
+			return f(right, d);
+		}
+
+		virtual ~expr_unary()
+		{
+			if(destroyed())
+				return;
+
+			set_destroyed();
+
+			delete &right;
+		}
+	};
+
+	struct expr_binary : public expr
+	{
+		expr &left;
+		expr &right;
+
+		std::function<s8 (expr &left, expr &right, device&)> f;
+
+		expr_binary(expr &left, expr &right, std::function<s8 (expr &left, expr &right, device&)> f)
+			: left(left), right(right), f(f)
+		{
+			;
+		}
+
+		s8 eval(device &d) override
+		{
+			return f(left, right, d);
+		}
+
+		virtual ~expr_binary()
+		{
+			if(destroyed())
+				return;
+
+			set_destroyed();
+
+			delete &left;
+			delete &right;
+		}
+	};
+
+	struct expr_ternary : public expr
+	{
+		expr &left;
+		expr &right;
+		expr &ternary;
+
+		std::function<s8 (expr &left, expr &right, expr &ternary, device&)> f;
+
+		expr_ternary(expr &left, expr &right, expr &ternary, std::function<s8 (expr &left, expr &right, expr &ternary, device&)> f)
+			: left(left), right(right), ternary(ternary), f(f)
+		{
+			;
+		}
+
+		s8 eval(device &d) override
+		{
+			return f(left, right, ternary, d);
+		}
+
+		virtual ~expr_ternary()
+		{
+			if(destroyed())
+				return;
+
+			set_destroyed();
+
+			delete &left;
+			delete &right;
+			delete &ternary;
+		}
+	};
+
+	// Ugh... Learn proper move semantics or something?
+	template<uw N>
+	struct expr_func : public expr
+	{
+		expr *arr[N] = {0};
+
+		std::function<s8 (expr *arr[N], device&)> f;
+
+		s8 eval(device &d) override
+		{
+			return f(arr, d);
+		}
+
+		virtual ~expr_func()
+		{
+			if(destroyed())
+				return;
+
+			set_destroyed();
+
+			for(uw i = 0; i < N; i++)
+				delete arr[i], arr[i] = 0;
+		}
+	};
+
+	struct tok
+	{
+		char sepa;
+		std::string symbol;
+		s8 num;
+
+		tok(char sepa, std::string symbol, s8 num)
+			: sepa(sepa), symbol(symbol), num(num)
+		{
+			;
+		}
+
+		bool is_sepa()
+		{
+			return sepa && sepa != 0x1A;
+		}
+
+		bool is_symbol()
+		{
+			return symbol.length();
+		}
+
+		bool is_num()
+		{
+			return sepa == 0x1A;
+		}
+	};
+
+	enum class precedence : int
+	{
+		semicolon = 1,
+		condition,
+		logic_or,
+		logic_and,
+		relational_eq_ne,
+		relational_gt_lt,
+		add_sub,
+		prefix,
+	};
+
+	static expr* parse(const char *input, device &dev)
+	{
+		return expr_parser(input, dev).parse();
+	}
+
+	const char *input;
+	const uw input_len;
+
+	device &dev;
+
+	uw lex_idx = 0;
+
+	expr_parser(const char *input, device &dev)
+		: input(input), input_len(std::strlen(input)), dev(dev)
+	{
+		;
+	}
+
+	tok lex_next()
+	{
+		while(lex_idx < input_len)
+		{
+			char c = input[lex_idx++];
+
+			if(c == '(' || c == ')' || c == '=' || c == '+' || c == '-' || c == '!'
+					|| c == '?' || c == ':' || c == '>' || c == '<' || c == '&'
+					|| c == '|' || c == '\'' || c == '\"' || c == ';')
+				return {c, std::string(), 0};
+			elif(std::isalpha(c))
+			{
+				uw start = lex_idx - 1;
+				while(lex_idx < input_len)
+					if(!std::isalnum(input[lex_idx]) && input[lex_idx] != '_')
+						break;
+					else
+						++lex_idx;
+
+				return tok('\0', std::string(input + start, lex_idx - start), 0);
+			}
+			elif(std::isdigit(c))
+			{
+				uw start = lex_idx - 1;
+				while(lex_idx < input_len)
+					if(!std::isdigit(input[lex_idx]))
+						break;
+					else
+						++lex_idx;
+
+				return tok(0x1A, std::string()
+					, std::stoll(std::string(input + start, lex_idx - start)));
+			}
+		}
+
+		return tok(0, std::string(), 0);
+	}
+
+	tok consume()
+	{
+		return lex_next();
+	}
+
+	tok lookahead(uw level = 1)
+	{
+		uw lex_idx = this->lex_idx;
+		tok t(0, "", 0);
+		while(level--)
+			t = lex_next();
+		this->lex_idx = lex_idx;
+
+		return t;
+	}
+
+	int get_precedence_infix()
+	{
+		char c = lookahead().sepa;
+
+		if(false)
+			;
+
+		elif(c == ';')
+			return scast<int>(precedence::semicolon);
+
+		elif(c == '?')
+			return scast<int>(precedence::condition);
+
+		elif(c == '|')
+			return scast<int>(precedence::logic_or);
+
+		elif(c == '&')
+			return scast<int>(precedence::logic_and);
+
+		elif(c == '=' || (c == '!' && lookahead(2).sepa == '='))
+			return scast<int>(precedence::relational_eq_ne);
+
+		elif((c == '>' && lookahead(2).sepa == '=')
+				|| (c == '<' && lookahead(2).sepa == '=')
+				|| c == '>' || c == '<')
+			return scast<int>(precedence::relational_gt_lt);
+
+		elif(c == '+' || c == '-')
+			return scast<int>(precedence::add_sub);
+
+		return -1;
+	}
+
+	expr* parse(int precedence, bool nothrow = false)
+	{
+		tok t = consume();
+
+		expr *left = null;
+		expr *right = null;
+		expr *ternary = null;
+
+		bool left_string = false;
+
+		bool failure = true;
+		raii res(
+			[&]()
+			{
+				if(!failure)
+					return;
+
+				if(left) {delete left; left = null; return;}
+				if(right) delete right, right = null;
+				if(ternary) delete ternary, ternary = null;
+			}); (void)res;
+
+		char c = t.sepa;
+
+		//
+		if(false)
+			;
+
+		elif(t.is_sepa() && c == '(')
+		{
+			left = parse();
+
+			if((t = consume()).sepa != ')')
+				throw "expr_parser: can't parse parens: expected ')'.";
+		}
+		elif(t.is_sepa() && c == '+')
+		{
+			right = parse(scast<int>(expr_parser::precedence::prefix));
+			left = new expr_unary(*right,
+				[](expr &right, device &d){return std::abs(right.eval(d));});
+		}
+		elif(t.is_sepa() && c == '-')
+		{
+			right = parse(scast<int>(expr_parser::precedence::prefix));
+			left = new expr_unary(*right,
+				[](expr &right, device &d){return -right.eval(d);});
+		}
+		elif(t.is_sepa() && c == '!')
+		{
+			right = parse(scast<int>(expr_parser::precedence::prefix));
+			left = new expr_unary(*right,
+				[](expr &right, device &d){return !right.eval(d);});
+		}
+
+		elif(t.is_symbol())
+		{
+			//
+			std::string name = t.symbol;
+
+			if(lookahead().sepa == '(')
+			{
+				t = consume();
+
+				if(false)
+					;
+
+				elif(!name.compare("str"))
+				{
+					right = parse();
+					left = new expr_unary(*right,
+						[](expr &right, device &d)
+						{
+							s8 e = right.eval(d);
+							std::string &s = *(new std::string(std::to_string(e)));
+
+							return (s8)&s;
+						});
+				}
+
+				elif(!name.compare("print"))
+				{
+					right = parse();
+					left = new expr_unary(*right,
+						[](expr &right, device &d)
+						{
+							std::string &s = *(std::string*)right.eval(d);
+							std::cout << s;
+							delete &s;
+
+							return 1;
+						});
+				}
+
+				elif(!name.compare("exec"))
+				{
+					right = parse();
+					left = new expr_unary(*right,
+						[](expr &right, device &d)
+						{
+							std::string &s = *(std::string*)right.eval(d);
+							int r = std::system(s.c_str());
+							delete &s;
+
+							return r;
+						});
+				}
+
+				elif(!name.compare("led_rgb"))
+				{
+					auto *f = new expr_func<3>();
+					left = f;
+					f->arr[0] = parse(0, true);
+					f->arr[1] = parse(0, true);
+					f->arr[2] = parse(0, true);
+
+					if(!f->arr[0] || !f->arr[1] || !f->arr[2])
+						throw "expr_parser: call to led_rgb(): expected 3 arguments.";
+
+					f->f =
+						[](expr *arr[], device &d)
+						{
+							std::cout << "led_rgb("
+								<< arr[0]->eval(d) << " "
+								<< arr[1]->eval(d) << " "
+								<< arr[2]->eval(d) << ")\n";
+
+							return 1;
+						};
+				}
+
+				elif(!name.compare("led_flash"))
+				{
+					auto *f = new expr_func<2>();
+					left = f;
+					f->arr[0] = parse(0, true);
+					f->arr[1] = parse(0, true);
+
+					if(!f->arr[0] || !f->arr[1])
+						throw "expr_parser: call to led_flash(): expected 2 arguments.";
+
+					f->f =
+						[](expr *arr[], device &d)
+						{
+							std::cout << "led_flash("
+								<< arr[0]->eval(d) << " "
+								<< arr[1]->eval(d) << ")\n";
+
+							return 1;
+						};
+				}
+
+				else
+					throw "expr_parser: call to undefined function '" + name + "'.";
+
+				if((t = consume()).sepa != ')')
+					throw "expr_parser: can't parse function call: expected ')' after '"
+						+ name + "(...'.";
+			}
+
+			//
+			else
+			{
+				bool prev_val = strstarts(t.symbol.c_str(), "prev_");
+
+				sw reading_idx =
+					dev.reading_index(prev_val ? t.symbol.c_str() + 5 : t.symbol.c_str());
+
+				if(reading_idx == -1)
+					throw "expr_parser: unknown device reading: '" + t.symbol + "'.";
+
+				if(!prev_val)
+					left = new expr_anon([reading_idx](device &d)
+						{return d.get_reading(reading_idx).val;});
+				else
+					left = new expr_anon([reading_idx](device &d)
+						{return d.get_reading(reading_idx).prev;});
+			}
+		}
+
+		elif(t.is_num())
+		{
+			s8 num = t.num;
+
+			left = new expr_anon([num](device&){return num;});
+		}
+
+		elif(t.is_sepa() && (c == '\'' || c == '\"'))
+		{
+			char buf[input_len - lex_idx /* Stfu. */];
+			char *tmp = buf;
+
+			while(lex_idx < input_len)
+			{
+				char h = input[lex_idx++];
+				if(h == c)
+					break;
+
+				if(h == '\\' && lex_idx < input_len)
+					if(input[lex_idx] == '\\')
+						h = '\\', ++lex_idx;
+					elif(input[lex_idx] == '\'')
+						h = '\'', ++lex_idx;
+					elif(input[lex_idx] == '\"')
+						h = '\"', ++lex_idx;
+					elif(input[lex_idx] == 't')
+						h = '\t', ++lex_idx;
+					elif(input[lex_idx] == 'r')
+						h = '\r', ++lex_idx;
+					elif(input[lex_idx] == 'n')
+						h = '\n', ++lex_idx;
+
+				*tmp = h;
+				++tmp;
+			}
+
+			*tmp = '\0';
+
+			std::string res(buf);
+			left = new expr_anon([res](device&){return (s8)new std::string(res);});
+			left_string = true;
+		}
+
+		elif(!nothrow)
+			throw "expr_parser: can't parse lhs.";
+		else
+			return null;
+
+		//
+		while(precedence < get_precedence_infix())
+		{
+			t = consume();
+			char c = t.sepa;
+
+			if(false)
+				;
+
+			elif(c == ';')
+			{
+				right = parse(0, true);
+
+				left = new expr_binary(*left, *right,
+					[](expr &left, expr &right, device &d)
+					{
+						s8 r = left.eval(d);
+
+						return &right ? right.eval(d) : r;
+					});
+			}
+
+			elif(c == '?')
+			{
+				// Then.
+				right = parse();
+
+				if((t = consume()).sepa != ':')
+					throw "expr_parser: can't parse ternary conditional: expected ':'"
+						" after 'then'.";
+
+				// Else.
+				// Right associative.
+				ternary = parse(scast<int>(expr_parser::precedence::condition) - 1);
+
+				left = new expr_ternary(*left, *right, *ternary,
+					[](expr &left, expr &right, expr &ternary, device &d){return (left.eval(d) ? right.eval(d) : ternary.eval(d));});
+			}
+
+			elif(c == '|')
+			{
+				right = parse(scast<int>(expr_parser::precedence::logic_or));
+				left = new expr_binary(*left, *right,
+					[](expr &left, expr &right, device &d){return left.eval(d) || right.eval(d);});
+			}
+			elif(c == '&')
+			{
+				right = parse(scast<int>(expr_parser::precedence::logic_and));
+				left = new expr_binary(*left, *right,
+					[](expr &left, expr &right, device &d){return left.eval(d) && right.eval(d);});
+			}
+
+			elif(c == '=')
+			{
+				right = parse(scast<int>(expr_parser::precedence::relational_eq_ne));
+				left = new expr_binary(*left, *right,
+					[](expr &left, expr &right, device &d){return left.eval(d) == right.eval(d);});
+			}
+			elif(c == '!' && lookahead(1).sepa == '=')
+			{
+				consume();
+
+				right = parse(scast<int>(expr_parser::precedence::relational_eq_ne));
+				left = new expr_binary(*left, *right,
+					[](expr &left, expr &right, device &d){return left.eval(d) == right.eval(d);});
+			}
+
+			elif(c == '>' && lookahead(1).sepa == '=')
+			{
+				consume();
+
+				right = parse(scast<int>(expr_parser::precedence::relational_gt_lt));
+				left = new expr_binary(*left, *right,
+					[](expr &left, expr &right, device &d){return left.eval(d) >= right.eval(d);});
+			}
+			elif(c == '<' && lookahead(1).sepa == '=')
+			{
+				consume();
+
+				right = parse(scast<int>(expr_parser::precedence::relational_gt_lt));
+				left = new expr_binary(*left, *right,
+					[](expr &left, expr &right, device &d){return left.eval(d) <= right.eval(d);});
+			}
+			elif(c == '>')
+			{
+				right = parse(scast<int>(expr_parser::precedence::relational_gt_lt));
+				left = new expr_binary(*left, *right,
+					[](expr &left, expr &right, device &d){return left.eval(d) > right.eval(d);});
+			}
+			elif(c == '<')
+			{
+				right = parse(scast<int>(expr_parser::precedence::relational_gt_lt));
+				left = new expr_binary(*left, *right,
+					[](expr &left, expr &right, device &d){return left.eval(d) < right.eval(d);});
+			}
+
+			elif(c == '+')
+			{
+				right = parse(scast<int>(expr_parser::precedence::add_sub));
+				if(!left_string)
+					left = new expr_binary(*left, *right,
+						[](expr &left, expr &right, device &d){return left.eval(d) + right.eval(d);});
+				else
+					left = new expr_binary(*left, *right,
+						[](expr &left, expr &right, device &d)
+						{
+							std::string *l = (std::string*)left.eval(d);
+							std::string *r = (std::string*)right.eval(d);
+
+							std::string *res = &(new std::string(*l))->append(*r);
+
+							delete l;
+							delete r;
+
+							return (s8)res;
+						});
+			}
+			elif(c == '-')
+			{
+				right = parse(scast<int>(expr_parser::precedence::add_sub));
+				left = new expr_binary(*left, *right,
+					[](expr &left, expr &right, device &d){return left.eval(d) - right.eval(d);});
+			}
+
+			else
+				throw "expr_parser: can't parse rhs.";
+		}
+
+		failure = false;
+
+		return left;
+	}
+
+	expr* parse()
+	{
+		return parse(0);
+	}
+};
+
 int main(int argc, const char **argv)
 {
 	signal(SIGINT, sigint);
 	signal(SIGHUP, sighup);
 	signal(SIGQUIT, sighup);
+
+	ds4_device d;
+	d.set_destroyed();
+	d.readings[33].val = 1;
+	d.readings[32].val = -2;
+
+	while(true)
+	{
+		std::cout << "> ";
+		std::string in;
+		std::getline(std::cin, in);
+		if(!in.size())
+			break;
+		try
+		{
+			expr *ex = expr_parser::parse(in.c_str(), d);
+			s8 r = ex->eval(d);
+			std::cout << r << std::endl;
+			delete ex;
+		}
+		catch(std::string s) {std::cout << s << std::endl;}
+		catch(const char *s) {std::cout << s << std::endl;}
+	}
+
+	exit(0);
 
 	ds4tux d4t;
 	d4t.init(process_args(argc, argv));
