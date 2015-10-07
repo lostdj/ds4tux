@@ -44,7 +44,7 @@ const char config_default[] = R"biteme!(
 
 	'comment': 'Ex. variable definition.',
 	'comment': 'DualShock 4 over USB.',
-	{'var': '$ds4_usb_masq':
+	'var': {'ds4_usb_masq':
 		{
 			'bus': 'BUS_USB', 'comment': "Actually this is ignored. It's always USB.",
 			'vendor': 1356,
@@ -53,13 +53,15 @@ const char config_default[] = R"biteme!(
 		}},
 
 	'comment': 'Xbox 360 controller.',
-	{'var': '$xbp_usb_masq':
+	'var': {'xbp_usb_masq':
 		{
 			'bus': 'BUS_USB',
 			'vendor': 1118,
 			'product': 654,
 			'version': 272
 		}},
+
+	'mapping':{'name':'default','for':'ds4'},
 
 	'comment': 'Example default DS4 mapping.',
 	'mapping':
@@ -70,13 +72,41 @@ const char config_default[] = R"biteme!(
 		'for': 'ds4',
 
 		'comment': 'Pretend we are a real thing.',
-		'masquerade': {'ref': '$ds4_usb_masq'},
+		'masquerade': {'ref': 'ds4_usb_masq'},
 
-		'when_do': ['l1 != l1', ['post', 'EV_KEY', 'BTN_Y', 'l1']],
-		'when_do': ['battery < 20', ['flash', 255, 0, 0, 5, 255]],
-		'when_do': ['l1=l1 & l2=l2',
-			['exec', 'echo "disconnect (%dev_mac%)" | bluetoothctl']]
-	}
+		'group':
+		{
+			'cond': {'when':'l1 != prev_l1', 'do':'print("--- l1\n")'},
+			'cond': {'when':'square', 'do':'0', 'greedy':true},
+			'cond': {
+				'when':'stick_left_x != prev_stick_left_x | stick_left_y != prev_stick_left_y',
+				'do':'print("--- x: " + str(stick_left_x) + " y: " + str(stick_left_y) + "\n")'},
+			'cond': {'when':'l2_analog != prev_l2_analog', 'do': 'print("--- l2_analog: " + str(l2_analog) + "\n")'}
+		},
+
+		'group':
+		{
+			'cond': {'when':'l1 & l2 & l1=r1 & l2=r2', 'do':'print("--- l1=r1...\n")'}
+		},
+
+		'group':
+		{
+			'cond': {'when':'battery != prev_battery | usb != prev_usb', 'do':'print("--- battery: " + str((battery*100) / (usb ? 11 : 9)) + "\n")'}
+		},
+
+		'comment':
+		{
+			'when_do': ['l1=r1 & l2=r2', 'print("l1=r1...\n")'],
+			'when_do': ['l1 != l1', 'print("l1\n")'],
+			'when_do': ['battery < 20', 'print("battery < 20\n")'],
+			'when_do': ['l1 != l1', ['post', 'EV_KEY', 'BTN_Y', 'l1']],
+			'when_do': ['battery < 20', ['flash', 255, 0, 0, 5, 255]],
+			'when_do': ['l1=l1 & l2=l2',
+				['exec', 'echo "disconnect (%dev_mac%)" | bluetoothctl']]
+		}
+	},
+
+	'mapping':{'name':'xbp','for':'ds4'}
 }
 
 )biteme!";
@@ -370,6 +400,19 @@ void sleep_ms(u8 ms)
 	nanosleep(&ts, null);
 }
 
+u8 now()
+{
+	timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+
+	return (ts.tv_sec * 1000000000) + (ts.tv_nsec);
+}
+
+u8 now_ms()
+{
+	return now() / 1000000;
+}
+
 u8 stopwatch(u8 &initial)
 {
 	timespec ts;
@@ -396,254 +439,6 @@ u8 stopwatch_sec(u8 &initial)
 {
 	return stopwatch(initial) / 1000000000;
 }
-
-//
-#include "ext/json.h/json.h"
-#ifndef DEV
-	#pragma GCC diagnostic push
-	#pragma GCC diagnostic warning "-fpermissive"
-	#include "ext/json.h/json.c"
-	#pragma GCC diagnostic pop
-#endif
-
-struct jstring
-{
-	char *string;
-	uw length;
-
-	jstring(char *string, uw length) : string(string), length(length) {}
-
-	operator char*() {return string;}
-};
-
-struct json
-{
-	enum t
-	{
-		t_string,
-		t_number,
-		t_object,
-		t_object_elem,
-		t_array,
-		t_array_elem,
-		t_true,
-		t_false,
-		t_null,
-		t_value,
-
-		t_bool,
-	};
-
-	void *o;
-	t type;
-
-	json(json_value_s *jsv) : o((void*)jsv), type(t_value)
-	{
-		if(!o)
-			type = t_null;
-	}
-
-	json(void *o, t type = t_value) : o(o), type(type)
-	{
-		if(!o)
-			type = t_null;
-	}
-
-	bool is_string() {return !is_null() && type == t_string;}
-	bool is_number() {return !is_null() && type == t_number;}
-	bool is_object() {return !is_null() && type == t_object;}
-	bool is_object_elem() {return !is_null() && type == t_object_elem;}
-	bool is_array() {return !is_null() && type == t_array;}
-	bool is_array_elem() {return !is_null() && type == t_array_elem;}
-	bool is_true() {return type == t_true;}
-	bool is_false() {return type == t_false;}
-	bool is_bool() {return is_true() || is_false();}
-	bool is_null() {return !o || type == t_null;}
-	bool is_value() {return !is_null() && type == t_value;}
-
-	uw length()
-	{
-		if(is_string() || is_number() || is_object() || is_array())
-			return ((json_string_s*)o)->string_size;
-		else
-			return 0;
-	}
-
-	jstring string()
-	{
-		if(is_string())
-			return jstring((char*)((json_string_s*)o)->string, length());
-		elif(is_number())
-			return jstring((char*)((json_number_s*)o)->number, length());
-		elif(is_object_elem())
-			return json((void*)((json_object_element_s*)o)->name, t_string).string();
-		else
-			return jstring(null, 0);
-	}
-
-	f8 number()
-	{
-		extern f8 atof(const char* str);
-
-		if(is_string() || is_number())
-			return atof(string());
-		else
-			return 0.0 / 0.0;
-	}
-
-	json value()
-	{
-		if(is_object_elem())
-			return json((json_value_s*)((json_object_element_s*)o)->value);
-		elif(is_array_elem())
-			return json((json_value_s*)((json_array_element_s*)o)->value);
-		elif(is_value())
-		{
-			json_value_s *jsv = (json_value_s*)o;
-			t type;
-
-			if(jsv->type == json_type_string)
-				type = t_string;
-			elif(jsv->type == json_type_number)
-				type = t_number;
-			elif(jsv->type == json_type_object)
-				type = t_object;
-			elif(jsv->type == json_type_array)
-				type = t_array;
-			elif(jsv->type == json_type_true)
-				type = t_true;
-			elif(jsv->type == json_type_false)
-				type = t_false;
-			else
-				type = t_null;
-
-			return json((void*)jsv->payload, type);
-		}
-		else
-			return json((json_value_s*)null);
-	}
-
-	// Actual value of object and array elems.
-	json payload()
-	{
-		return value().value();
-	}
-
-	bool has_next()
-	{
-		if(is_object_elem())
-			return ((json_object_element_s*)o)->next != null;
-		elif(is_array_elem())
-			return ((json_array_element_s*)o)->next != null;
-		elif(is_object())
-			return ((json_object_s*)o)->start != null;
-		elif(is_array())
-			return ((json_array_s*)o)->start != null;
-		else
-			return false;
-	}
-
-	json next()
-	{
-		if(is_object_elem())
-			return json((void*)((json_object_element_s*)o)->next, t_object_elem);
-		elif(is_array_elem())
-			return json((void*)((json_array_element_s*)o)->next, t_array_elem);
-		elif(is_object())
-			return json((void*)((json_object_s*)o)->start, t_object_elem);
-		elif(is_array())
-			return json((void*)((json_array_s*)o)->start, t_array_elem);
-		else
-			return json((json_value_s*)null);
-	}
-
-	bool obj_is(const char *name)
-	{
-		return is_object_elem() && string() && streq(string(), name);
-	}
-
-	bool obj_is(t value_type)
-	{
-		if(!is_object_elem())
-			return false;
-
-		json p = payload();
-		return p.type == value_type || (value_type == t_bool && p.is_bool());
-	}
-
-	bool obj_is(const char *name, t value_type)
-	{
-		return obj_is(name) && obj_is(value_type);
-	}
-
-	bool is_comment()
-	{
-		return obj_is("comment");
-	}
-
-	bool is_var_def()
-	{
-		return is_object_elem() && string() && string()[0] == '$';
-	}
-
-	bool is_var_ref()
-	{
-		return is_string() && string() && string()[0] == '$';
-	}
-
-	void p(bool comma = false, bool space = false)
-	{
-		if(comma)
-			std::cout << ",";
-
-		if(space)
-			std::cout << " ";
-
-		if(is_string())
-			std::cout << "\"" << string() << "\"";
-		elif(is_number())
-			std::cout << number();
-		elif(is_object())
-		{
-			std::cout << "{";
-			if(has_next())
-				next().p();
-			std::cout << "}";
-		}
-		elif(is_object_elem())
-		{
-			std::cout << "\"" << string() << "\":";
-			value().p();
-			if(has_next())
-				next().p(true, true);
-			else
-				std::cout << "";
-		}
-		elif(is_array())
-		{
-			std::cout << "[";
-			if(has_next())
-				next().p();
-			std::cout << "]";
-		}
-		elif(is_array_elem())
-		{
-			value().p();
-			if(has_next())
-				next().p(true, true);
-			else
-				std::cout << "";
-		}
-		elif(is_true())
-			std::cout << "true";
-		elif(is_false())
-			std::cout << "false";
-		elif(is_null())
-			std::cout << "null";
-		elif(is_value())
-			value().p();
-	}
-};
 
 //
 //#include <linux/hidraw.h>
@@ -743,7 +538,7 @@ struct myudev : public initialized_helper
 						goto next_;
 
 					i_name = udev_device_get_sysname(raw_dev);
-					if(strstarts(i_name, clazz))
+					if(!strstarts(i_name, clazz))
 						goto next_;
 
 					input_parent = udev_device_get_parent_with_subsystem_devtype(
@@ -1045,17 +840,17 @@ struct uinput
 struct device_reading
 {
 	const char *const name;
-	const std::function<s4 (byte*)> reader;
-	s4 val = 0;
-	s4 prev = 0;
+	const std::function<s8 (byte*)> reader;
+	s8 val = 0;
+	s8 prev = 0;
 
-	device_reading(const char *name, std::function<s4 (const byte *const)> reader)
+	device_reading(const char *name, std::function<s8 (const byte *const)> reader)
 		: name(name), reader(reader)
 	{
 		;
 	}
 
-	s4 read(byte *buf)
+	s8 read(byte *buf)
 	{
 		prev = val;
 		val = reader(buf);
@@ -1067,9 +862,94 @@ private:
 	device_reading& operator=(device_reading const&);
 };
 
+//
+struct device;
+
+struct expr : public initialized_helper
+{
+	virtual s8 eval(device &d) = 0;
+
+	virtual ~expr()
+	{
+		set_destroyed();
+	}
+};
+
+//
+struct mapping : public initialized_helper
+{
+	struct cond : public initialized_helper
+	{
+		expr *when = null;
+		expr *d0 = null;
+		const bool greedy = false;
+
+		cond(expr *when, expr *d0, bool greedy)
+			: when(when), d0(d0), greedy(greedy)
+		{
+			set_initialized();
+		}
+
+		~cond()
+		{
+			if(!initialized() || destroyed())
+				return;
+
+			set_destroyed();
+
+			delete when, when = null;
+			delete d0, d0 = null;
+		}
+	};
+
+	struct group : public initialized_helper
+	{
+		std::vector<cond*> conditions;
+
+		group(std::vector<cond*> conditions)
+			: conditions(conditions)
+		{
+			set_initialized();
+		}
+
+		~group()
+		{
+			if(!initialized() || destroyed())
+				return;
+
+			set_destroyed();
+
+			for(auto i : conditions)
+				delete i;
+		}
+	};
+
+	std::vector<group*> groups;
+
+	mapping(std::vector<group*> groups)
+		: groups(groups)
+	{
+		set_initialized();
+	}
+
+	~mapping()
+	{
+		if(!initialized() || destroyed())
+			return;
+
+		set_destroyed();
+
+		for(auto i : groups)
+			delete i;
+	}
+};
+
+//
 struct device : public initialized_helper
 {
 	myudev::dev_info devinfo;
+	std::vector<mapping*> mappings;
+	mapping *current_mapping = null;
 
 	device()
 	{
@@ -1077,14 +957,17 @@ struct device : public initialized_helper
 			, std::string(""), std::string(""), std::string(""), "", "", 0, 0};
 	}
 
-	device(myudev::dev_info devinfo)
-		: devinfo(devinfo)
+	device(myudev::dev_info devinfo, std::vector<mapping*> &mappings)
+		: devinfo(devinfo), mappings(mappings)
 	{
-		;
+		if(mappings.size())
+			current_mapping = mappings[0];
 	}
 
 	virtual bool init() = 0;
+
 	virtual device_reading& get_reading(uw index) = 0;
+
 	virtual void readings_iterate(std::function<bool (device_reading&, uw)> f) = 0;
 
 	sw reading_index(const char *name)
@@ -1112,19 +995,42 @@ struct device : public initialized_helper
 		return devinfo.dev_node;
 	}
 
+	virtual void readings_read() = 0;
+
+	void tick()
+	{
+		readings_read();
+
+		if(!current_mapping || !current_mapping->groups.size())
+			return;
+
+		mapping::group **g = &current_mapping->groups[0];
+		for(uw i = 0; i < current_mapping->groups.size(); i++)
+		{
+			mapping::cond **c = &g[i]->conditions[0];
+			for(uw j = 0; j < g[i]->conditions.size(); j++)
+				if(c[j]->when->eval(*this))
+				{
+					c[j]->d0->eval(*this);
+
+					if(c[j]->greedy)
+						break;
+				}
+		}
+	}
+
 	virtual ~device()
 	{
 		;
 	}
 };
 
+//
 struct ds4_device : public device
 {
 	int devfd = -1;
 	int eventfd = -1;
 	libevdev *eventdev = null;
-
-	byte *buf = null;
 
 	// I honestly did try to do this "more" in compile time,
 	// making device a variadic base data type and avoiding using macros.
@@ -1167,128 +1073,15 @@ struct ds4_device : public device
 		{"usb", [](const byte *const buf){return (buf[30] & 16) != 0;}},
 	};
 
-	struct report
-	{
-		byte left_analog_x;
-		byte left_analog_y;
-		byte right_analog_x;
-		byte right_analog_y;
-		byte l2_analog;
-		byte r2_analog;
-		byte dpad_up;
-		byte dpad_down;
-		byte dpad_left;
-		byte dpad_right;
-		byte cross;
-		byte circle;
-		byte square;
-		byte triangle;
-		byte l1;
-		byte l2;
-		byte l3;
-		byte r1;
-		byte r2;
-		byte r3;
-		byte share;
-		byte options;
-		byte trackpad;
-		byte ps;
-
-		s2 motion_y;
-		s2 motion_x;
-		s2 motion_z;
-
-		s2 orientation_roll;
-		s2 orientation_yaw;
-		s2 orientation_pitch;
-
-		byte trackpad_touch0_id;
-		byte trackpad_touch0_active;
-		u2 trackpad_touch0_x;
-		u2 trackpad_touch0_y;
-		byte trackpad_touch1_id;
-		byte trackpad_touch1_active;
-		u2 trackpad_touch1_x;
-		u2 trackpad_touch1_y;
-
-		byte counter;
-		byte battery;
-		byte battery2;
-		bool plug_usb;
-		bool plug_audio;
-		bool plug_mic;
-	};
-
 	ds4_device() : device()
 	{
 		;
 	}
 
-	ds4_device(myudev::dev_info devinfo)
-		: device(devinfo)
+	ds4_device(myudev::dev_info devinfo, std::vector<mapping*> &mappings)
+		: device(devinfo, mappings)
 	{
 		;
-	}
-
-	device_reading& get_reading(uw index) override
-	{
-		return readings[index];
-	}
-
-	void readings_iterate(std::function<bool (device_reading&, uw)> f) override
-	{
-		for(uw i = 0; i < arrlen(readings); i++)
-			if(f(readings[i], i))
-				break;
-	}
-
-	bool init() override
-	{
-		if(initialized() || destroyed())
-			return true;
-
-		verbose(std::cout << "ds4_device init" << std::endl);
-
-		raii res(
-			[this]()
-			{
-				if(initialized() || destroyed())
-					return;
-
-				destroy();
-			}); (void)res;
-
-		devfd = open(devinfo.dev_node.c_str(), O_RDWR | O_NONBLOCK);
-		if(devfd == -1)
-		{
-			std::cout << "Open devfd: " << errno << " " << strerror(errno)
-				<< ". Please check your udev rules." << std::endl;
-
-			return false;
-		}
-
-		eventfd = open(devinfo.event_node.c_str(), O_RDONLY | O_NONBLOCK);
-		if(eventfd == -1)
-		{
-			std::cout << "Open eventfd: " << errno << " " << strerror(errno)
-				<< std::endl;
-
-			return false;
-		}
-
-		if(libevdev_new_from_fd(eventfd, &eventdev) < 0)
-			return false;
-
-		if(libevdev_grab(eventdev, LIBEVDEV_GRAB))
-			return false;
-
-		buf = new byte[report_size()];
-
-		set_initialized();
-
-		set_operational();
-
-		return true;
 	}
 
 	int report_size()
@@ -1339,23 +1132,63 @@ struct ds4_device : public device
 			read_feature_report(0x81, 6);
 	}
 
-	report read_report()
+	bool init() override
 	{
-		if(!initialized() || destroyed())
-			return report();
+		if(initialized() || destroyed())
+			return true;
 
-		int r = read(devfd, buf, report_size());
+		verbose(std::cout << "ds4_device init" << std::endl);
 
-		if(r < report_size() || buf[0] != valid_report_id())
-			return report();
+		raii res(
+			[this]()
+			{
+				if(initialized() || destroyed())
+					return;
 
-		if(devinfo.usb)
-			return parse_report(buf);
+				destroy();
+			}); (void)res;
 
-		byte buf[report_size()];
-		std::memcpy(buf, this->buf + 2, report_size() - 2);
+		devfd = open(devinfo.dev_node.c_str(), O_RDWR | O_NONBLOCK);
+		if(devfd == -1)
+		{
+			std::cout << "Open devfd: " << errno << " " << strerror(errno)
+				<< ". Please check your udev rules." << std::endl;
 
-		return parse_report(buf);
+			return false;
+		}
+
+		eventfd = open(devinfo.event_node.c_str(), O_RDONLY | O_NONBLOCK);
+		if(eventfd == -1)
+		{
+			std::cout << "Open eventfd: " << errno << " " << strerror(errno)
+				<< std::endl;
+
+			return false;
+		}
+
+		if(libevdev_new_from_fd(eventfd, &eventdev) < 0)
+			return false;
+
+		if(libevdev_grab(eventdev, LIBEVDEV_GRAB))
+			return false;
+
+		set_initialized();
+
+		set_operational();
+
+		return true;
+	}
+
+	device_reading& get_reading(uw index) override
+	{
+		return readings[index];
+	}
+
+	void readings_iterate(std::function<bool (device_reading&, uw)> f) override
+	{
+		for(uw i = 0; i < arrlen(readings); i++)
+			if(f(readings[i], i))
+				break;
 	}
 
 	void write_report(byte report_id, byte *data, int size)
@@ -1367,95 +1200,6 @@ struct ds4_device : public device
 		buf[0] = report_id;
 		std::memcpy(buf + 1, data, size);
 		write(devfd, buf, size + 1);
-	}
-
-	report prev;
-
-	report parse_report(byte *buf)
-	{
-		if(!initialized() || destroyed())
-			return report();
-
-		report r;
-
-		r.left_analog_x = buf[1];
-		r.left_analog_y = buf[2];
-		r.right_analog_x = buf[3];
-		r.right_analog_y = buf[4];
-		r.l2_analog = buf[8];
-		r.r2_analog = buf[9];
-		r.dpad_up = buf[5] == 0 || buf[5] == 1 || buf[5] == 7;
-		r.dpad_down = buf[5] == 3 || buf[5] == 4 || buf[5] == 5;
-		r.dpad_left = buf[5] == 5 || buf[5] == 6 || buf[5] == 7;
-		r.dpad_right = buf[5] == 1 || buf[5] == 2 || buf[5] == 3;
-		r.cross = (buf[5] & 32) != 0;
-		r.circle = (buf[5] & 64) != 0;
-		r.square = (buf[5] & 16) != 0;
-		r.triangle = (buf[5] & 128) != 0;
-		r.l1 = (buf[6] & 1) != 0;
-		r.l2 = (buf[6] & 4) != 0;
-		r.l3 = (buf[6] & 64) != 0;
-		r.r1 = (buf[6] & 2) != 0;
-		r.r2 = (buf[6] & 8) != 0;
-		r.r3 = (buf[6] & 128) != 0;
-		r.share = (buf[6] & 16) != 0;
-		r.options = (buf[6] & 32) != 0;
-		r.trackpad = (buf[7] & 2) != 0;
-		r.ps = (buf[7] & 1) != 0;
-		r.trackpad_touch0_id = buf[35] & 0x7F;
-		r.trackpad_touch0_active = (buf[35] >> 7) == 0;
-		r.trackpad_touch0_x = ((buf[37] & 0x0F) << 8) | buf[36];
-		r.trackpad_touch0_y = buf[38] << 4 | ((buf[37] & 0xF0) >> 4);
-		r.trackpad_touch1_id = buf[39] & 0x7F;
-		r.trackpad_touch1_active = (buf[39] >> 7) == 0;
-		r.trackpad_touch1_x = ((buf[41] & 0x0F) << 8) | buf[40];
-		r.trackpad_touch1_y = buf[42] << 4 | ((buf[41] & 0xF0) >> 4);
-		r.counter = buf[7] >> 2;
-		r.battery = buf[30] % 16;
-		r.battery2 = buf[12];
-		r.plug_usb = (buf[30] & 16) != 0;
-		r.plug_audio = (buf[30] & 32) != 0;
-		r.plug_mic = (buf[30] & 64) != 0;
-
-//		if(prev.left_analog_x != r.left_analog_x || prev.left_analog_y != r.left_analog_y)
-//			std::cout << "LX: " << (int)r.left_analog_x << " LY: " << (int)r.left_analog_y << std::endl;
-
-//		if(prev.right_analog_x != r.right_analog_x || prev.right_analog_y != r.right_analog_y)
-//			std::cout << "RX: " << (int)r.right_analog_x << " RY: " << (int)r.right_analog_y << std::endl;
-
-//		if(prev.l2_analog != r.l2_analog || prev.r2_analog != r.r2_analog)
-//			std::cout << "L2A: " << (int)r.l2_analog << " R2A: " << (int)r.r2_analog << std::endl;
-
-//		if(prev.dpad_up != r.dpad_up || prev.dpad_down != r.dpad_down || prev.dpad_left != r.dpad_left || prev.dpad_right != r.dpad_right)
-//			std::cout << "U: " << (int)r.dpad_up << " D: " << (int)r.dpad_down << " L: " << (int)r.dpad_left << " R: " << (int)r.dpad_right << std::endl;
-
-//		if(prev.cross != r.cross || prev.circle != r.circle || prev.square != r.square || prev.triangle != r.triangle)
-//			std::cout << "X: " << (int)r.cross << " O: " << (int)r.circle << " Q: " << (int)r.square << " R: " << (int)r.triangle << std::endl;
-
-//		if(prev.l1 != r.l1 || prev.l2 != r.l2 || prev.l3 != r.l3)
-//			std::cout << "L1: " << (int)r.l1 << " L2: " << (int)r.l2 << " L3: " << (int)r.l3 << std::endl;
-
-//		if(prev.r1 != r.r1 || prev.r2 != r.r2 || prev.r3 != r.r3)
-//			std::cout << "R1: " << (int)r.r1 << " R2: " << (int)r.r2 << " R3: " << (int)r.r3 << std::endl;
-
-//		if(prev.share != r.share || prev.options != r.options || prev.trackpad != r.trackpad || prev.ps != r.ps)
-//			std::cout << "S: " << (int)r.share << " O: " << (int)r.options << " T: " << (int)r.trackpad << " P: " << (int)r.ps << std::endl;
-
-//		if(prev.trackpad_touch0_id != r.trackpad_touch0_id || prev.trackpad_touch0_active != r.trackpad_touch0_active || prev.trackpad_touch0_x != r.trackpad_touch0_x || prev.trackpad_touch0_y != r.trackpad_touch0_y)
-//			std::cout << "t0.id: " << (int)r.trackpad_touch0_id << " t0.a: " << (int)r.trackpad_touch0_active << " t0.x: " << (int)r.trackpad_touch0_x << " t0.y: " << (int)r.trackpad_touch0_y << std::endl;
-
-//		if(prev.trackpad_touch1_id != r.trackpad_touch1_id || prev.trackpad_touch1_active != r.trackpad_touch1_active || prev.trackpad_touch1_x != r.trackpad_touch1_x || prev.trackpad_touch1_y != r.trackpad_touch1_y)
-//			std::cout << "t1.id: " << (int)r.trackpad_touch1_id << " t1.a: " << (int)r.trackpad_touch1_active << " t1.x: " << (int)r.trackpad_touch1_x << " t1.y: " << (int)r.trackpad_touch1_y << std::endl;
-
-		if(prev.plug_usb != r.plug_usb/* || prev.plug_audio != r.plug_audio || prev.plug_mic != r.plug_mic*/)
-			std::cout << "usb: " << (int)r.plug_usb /*<< " aud: " << (int)r.plug_audio << " mic: " << (int)r.plug_mic*/ << std::endl;
-
-		if(prev.battery != r.battery || prev.battery2 != r.battery2)
-			std::cout << "batt: " << ((r.battery * 100) / (r.plug_usb ? 11 : 9)) << "(" << (int)r.battery << ")" << " batt2: " << (int)r.battery2 << std::endl;
-
-		prev = r;
-
-		return r;
 	}
 
 	void control()
@@ -1497,6 +1241,21 @@ struct ds4_device : public device
 			write_report(report_id, pkt, 77);
 	}
 
+	void readings_read() override
+	{
+		if(!initialized() || destroyed())
+			return;
+
+		byte buf[report_size()];
+		int r = read(devfd, buf, report_size());
+
+		if(r < report_size() || buf[0] != valid_report_id())
+			return;
+
+		for(uw i = 0; i < arrlen(readings); i++)
+			readings[i].read(devinfo.usb ? buf : buf + 2);
+	}
+
 	void destroy()
 	{
 		if(!initialized() || destroyed())
@@ -1520,9 +1279,6 @@ struct ds4_device : public device
 		if(eventfd != -1)
 			close(eventfd), eventfd = -1;
 
-		if(buf)
-			delete[] buf, buf = null;
-
 		set_destroyed();
 	}
 
@@ -1540,341 +1296,7 @@ struct ds4_device : public device
 };
 
 //
-struct ds4tux : public initialized_helper
-{
-	//
-	struct first_time_init
-	{
-		static bool initialized()
-		{
-			return _initialized;
-		}
-
-		static void set_initialized()
-		{
-			_initialized = true;
-		}
-
-	private:
-		static bool _initialized;
-	};
-
-	//
-	std::vector<std::string> configs;
-
-	bool config_reload = false;
-
-	//
-	myudev md;
-
-	std::unordered_map<std::string, device*> devices;
-
-	//
-	void config_parse(json cfg)
-	{
-		if(cfg.is_null())
-			return;
-
-		std::unordered_map<std::string, json> vars;
-
-		auto get_var =
-			[&vars](json o) -> json
-			{
-				if(o.is_var_ref())
-					if(vars.count(std::string(o.string())))
-						return vars.at(std::string(o.string()));
-					else
-					{
-						std::cerr << "Can't find referenced var '" << o.string()
-							<< "'. Exiting.";
-
-						std::exit(1);
-					}
-				else
-					return o;
-			};
-
-		auto obj_is =
-			[&get_var](json &o, const char *name, json::t type) -> bool
-			{
-				if(!o.obj_is(name))
-					return false;
-
-				json var = get_var(o.payload());
-
-				return var.type == type || (type == json::t::t_bool && var.is_bool());
-			};
-
-		while(cfg.has_next())
-		{
-			cfg = cfg.next();
-
-			if(cfg.is_comment())
-				;
-			elif(cfg.is_var_def())
-			{
-				if(vars.count(std::string(cfg.string())))
-					vars.erase(std::string(cfg.string()));
-
-				vars.insert({{std::string(cfg.string()), cfg.payload()}});
-			}
-			elif(obj_is(cfg, "config_paths", json::t_array))
-			{
-				configs.clear();
-
-				json a = cfg.payload();
-				while(a.has_next())
-				{
-					a = a.next();
-					if(a.payload().is_string())
-						configs.push_back(std::string(a.payload().string()));
-				}
-			}
-			elif(obj_is(cfg, "config_reload", json::t_bool))
-				config_reload = cfg.payload().is_true();
-//			elif(obj_is(cfg, "mapping", json::t_bool))
-//				std::cout << "Cool cool cool." << std::endl;
-		}
-
-//		std::cout << "---" << config_reload << std::endl;
-//		std::cout << configs.at(0);
-	}
-
-	void init(const char *args = null)
-	{
-		//
-		if(initialized())
-			return;
-
-		//
-		json cfg(json_parse((void*)config_default, sizeof(config_default)));
-		if(cfg.is_null())
-		{
-			std::cerr << "Can't parse default config. Exiting.";
-
-			std::exit(1);
-		}
-		config_parse(cfg.value());
-		std::free(cfg.o);
-
-		//
-		if(args)
-		{
-			cfg = json(json_parse((void*)args, std::strlen(args)));
-			if(cfg.is_null())
-				std::cerr << "Can't parse command line arguments." << std::endl;
-			else
-				config_parse(cfg.value());
-
-			if(cfg.o)
-				std::free(cfg.o);
-		}
-
-		//
-		if(!md.init())
-		{
-			std::cerr << "Failed to initialize udev." << std::endl;
-
-			return;
-		}
-
-		//
-		set_initialized();
-	}
-
-	void tick()
-	{
-		verbose(
-			auto verbosedev = [](myudev::dev_info di, const char *act)
-			{
-				std::cout << act
-					<< " " << di.vid << ";"
-					<< " " << di.pid << ";"
-					<< " " << di.serial << ";"
-					<< " " << di.name << ";"
-					<< " node: " << di.dev_node << ";"
-					<< " input: " << di.input_node << ";"
-					<< " event: " << di.event_node << ";"
-					<< " " << di.manufacturer << ";"
-					<< " " << di.product << ";"
-					<< " " << di.release_number << ";"
-					<< " " << di.interface_number << ";"
-					;
-				if(ds4_device::is_ds4(di.vid, di.pid, di.name.c_str()))
-					std::cout << ". Got ds4! " << di.pid;
-				std::cout << std::endl;
-				std::cout << "-------------------------" << std::endl;
-			};
-
-			myudev::on_dev_change_sig verbosedadd =
-			[&verbosedev](myudev::dev_info di)
-			{
-				verbosedev(di, "add");
-			};
-
-			myudev::on_dev_change_sig verbosedrem =
-			[&verbosedev](myudev::dev_info di)
-			{
-				verbosedev(di, "rem");
-			};);
-
-		myudev::on_dev_change_sig dadd =
-			[&, this](myudev::dev_info di)
-			{
-				verbose(verbosedadd(di));
-
-				if(!ds4_device::is_ds4(di.vid, di.pid, di.name.c_str()))
-					return;
-
-				ds4_device *d = new ds4_device(di);
-
-				if(devices.count(d->id()))
-				{
-					std::cerr << "Already in list: " << d->devinfo.dev_node << ". Wtf?"
-						<< std::endl;
-
-					d->set_destroyed();
-					delete d;
-
-					return;
-				}
-
-				devices.insert({{d->id(), d}});
-
-				d->init();
-				sleep_ms(500);
-				d->control();
-			};
-
-		myudev::on_dev_change_sig drem =
-			[&, this](myudev::dev_info di)
-			{
-				verbose(verbosedrem(di));
-
-//				if(!ds4_device::is_ds4(di.vid, di.pid, di.name.c_str()))
-//					return;
-
-				ds4_device d(di);
-				d.set_destroyed();
-
-				if(!devices.count(d.id()))
-					return;
-
-				device *orig = devices.at(d.id());
-				if(orig)
-				{
-					devices.erase(orig->id());
-
-					delete orig;
-				}
-			};
-
-		md.poll(dadd, drem);
-
-		for(auto i = devices.begin(); i != devices.end();)
-			if(!i->second->init() || i->second->destroyed())
-				delete i->second, i = devices.erase(i);
-			else
-			{
-//				((ds4_device*)i->second)->read_report();
-
-				++i;
-			}
-	}
-
-	void start()
-	{
-		;
-	}
-
-	void destroy()
-	{
-		if(destroyed())
-			return;
-
-		verbose(std::cout << "d4t.destroy()" << std::endl);
-
-		for(auto i = devices.begin(); i != devices.end();)
-			delete i->second, i = devices.erase(i);
-
-		md.destroy();
-
-		set_destroyed();
-	}
-
-	~ds4tux()
-	{
-		destroy();
-	}
-};
-
-// This shit still?!
-bool ds4tux::first_time_init::_initialized = false;
-
-//
-#include <csignal>
-
-bool quit = false;
-bool reload = false;
-
-void sigint(int sig)
-{
-	(void)sig;
-
-	quit = true;
-}
-
-void sighup(int sig)
-{
-	(void)sig;
-
-	reload = true;
-	std::cout << "reload" << std::endl;
-}
-
-char* process_args(int argc, const char **argv)
-{
-	if(argc > 1
-		 && (streq("h", argv[1]) || streq("help", argv[1])
-				 || streq("-h", argv[1]) || streq("--h", argv[1])
-				 || streq("-help", argv[1]) || streq("--help", argv[1])))
-	{
-		std::cout << "Help me!" << std::endl;
-
-		std::exit(0);
-	}
-
-	uw arglen = 0;
-	for(int i = 1; i < argc; i++)
-		arglen += std::strlen(argv[i]);
-
-	if(!arglen)
-		return null;
-
-	++arglen;
-	auto args = new char[arglen];
-	for(int i = 1, j = 0; i < argc; i++)
-	{
-		uw l = std::strlen(argv[i]);
-		std::memcpy(args + j, argv[i], l);
-		j += l;
-	}
-
-	return args;
-}
-
-//
 #include <cctype>
-
-struct expr : public initialized_helper
-{
-	virtual s8 eval(device &d) = 0;
-
-	virtual ~expr()
-	{
-		set_destroyed();
-	}
-};
 
 struct expr_parser
 {
@@ -2050,6 +1472,7 @@ struct expr_parser
 		relational_eq_ne,
 		relational_gt_lt,
 		add_sub,
+		mul_div,
 		prefix,
 	};
 
@@ -2077,7 +1500,8 @@ struct expr_parser
 		{
 			char c = input[lex_idx++];
 
-			if(c == '(' || c == ')' || c == '=' || c == '+' || c == '-' || c == '!'
+			if(c == '(' || c == ')' || c == '=' || c == '+' || c == '-'
+					|| c == '*' || c == '/' || c == '%' || c == '!'
 					|| c == '?' || c == ':' || c == '>' || c == '<' || c == '&'
 					|| c == '|' || c == '\'' || c == '\"' || c == ';')
 				return {c, std::string(), 0};
@@ -2155,6 +1579,9 @@ struct expr_parser
 		elif(c == '+' || c == '-')
 			return scast<int>(precedence::add_sub);
 
+		elif(c == '*' || c == '/' || c == '%')
+			return scast<int>(precedence::mul_div);
+
 		return -1;
 	}
 
@@ -2176,8 +1603,8 @@ struct expr_parser
 					return;
 
 				if(left) {delete left; left = null; return;}
-				if(right) delete right, right = null;
 				if(ternary) delete ternary, ternary = null;
+				if(right) delete right, right = null;
 			}); (void)res;
 
 		char c = t.sepa;
@@ -2191,7 +1618,7 @@ struct expr_parser
 			left = parse();
 
 			if((t = consume()).sepa != ')')
-				throw "expr_parser: can't parse parens: expected ')'.";
+				throw std::string("expr_parser: can't parse parens: expected ')'.");
 		}
 		elif(t.is_sepa() && c == '+')
 		{
@@ -2265,6 +1692,15 @@ struct expr_parser
 						});
 				}
 
+				elif(!name.compare("now"))
+				{
+					left = new expr_anon(
+						[](device&)
+						{
+							return (s8)now_ms();
+						});
+				}
+
 				elif(!name.compare("led_rgb"))
 				{
 					auto *f = new expr_func<3>();
@@ -2274,7 +1710,8 @@ struct expr_parser
 					f->arr[2] = parse(0, true);
 
 					if(!f->arr[0] || !f->arr[1] || !f->arr[2])
-						throw "expr_parser: call to led_rgb(): expected 3 arguments.";
+						throw
+							std::string("expr_parser: call to led_rgb(r g b): expected 3 arguments.");
 
 					f->f =
 						[](expr *arr[], device &d)
@@ -2296,7 +1733,8 @@ struct expr_parser
 					f->arr[1] = parse(0, true);
 
 					if(!f->arr[0] || !f->arr[1])
-						throw "expr_parser: call to led_flash(): expected 2 arguments.";
+						throw
+							std::string("expr_parser: call to led_flash(on off): expected 2 arguments.");
 
 					f->f =
 						[](expr *arr[], device &d)
@@ -2381,7 +1819,7 @@ struct expr_parser
 		}
 
 		elif(!nothrow)
-			throw "expr_parser: can't parse lhs.";
+			throw std::string("expr_parser: can't parse lhs.");
 		else
 			return null;
 
@@ -2413,8 +1851,9 @@ struct expr_parser
 				right = parse();
 
 				if((t = consume()).sepa != ':')
-					throw "expr_parser: can't parse ternary conditional: expected ':'"
-						" after 'then'.";
+					throw
+						std::string("expr_parser: can't parse ternary conditional: expected ':'"
+							" after 'then'.");
 
 				// Else.
 				// Right associative.
@@ -2443,16 +1882,16 @@ struct expr_parser
 				left = new expr_binary(*left, *right,
 					[](expr &left, expr &right, device &d){return left.eval(d) == right.eval(d);});
 			}
-			elif(c == '!' && lookahead(1).sepa == '=')
+			elif(c == '!' && lookahead().sepa == '=')
 			{
 				consume();
 
 				right = parse(scast<int>(expr_parser::precedence::relational_eq_ne));
 				left = new expr_binary(*left, *right,
-					[](expr &left, expr &right, device &d){return left.eval(d) == right.eval(d);});
+					[](expr &left, expr &right, device &d){return left.eval(d) != right.eval(d);});
 			}
 
-			elif(c == '>' && lookahead(1).sepa == '=')
+			elif(c == '>' && lookahead().sepa == '=')
 			{
 				consume();
 
@@ -2460,7 +1899,7 @@ struct expr_parser
 				left = new expr_binary(*left, *right,
 					[](expr &left, expr &right, device &d){return left.eval(d) >= right.eval(d);});
 			}
-			elif(c == '<' && lookahead(1).sepa == '=')
+			elif(c == '<' && lookahead().sepa == '=')
 			{
 				consume();
 
@@ -2509,8 +1948,27 @@ struct expr_parser
 					[](expr &left, expr &right, device &d){return left.eval(d) - right.eval(d);});
 			}
 
+			elif(c == '*')
+			{
+				right = parse(scast<int>(expr_parser::precedence::mul_div));
+				left = new expr_binary(*left, *right,
+					[](expr &left, expr &right, device &d){return left.eval(d) * right.eval(d);});
+			}
+			elif(c == '/')
+			{
+				right = parse(scast<int>(expr_parser::precedence::mul_div));
+				left = new expr_binary(*left, *right,
+					[](expr &left, expr &right, device &d){return left.eval(d) / right.eval(d);});
+			}
+			elif(c == '%')
+			{
+				right = parse(scast<int>(expr_parser::precedence::mul_div));
+				left = new expr_binary(*left, *right,
+					[](expr &left, expr &right, device &d){return left.eval(d) % right.eval(d);});
+			}
+
 			else
-				throw "expr_parser: can't parse rhs.";
+				throw std::string("expr_parser: can't parse rhs.");
 		}
 
 		failure = false;
@@ -2524,47 +1982,834 @@ struct expr_parser
 	}
 };
 
+//
+#include "ext/json.h/json.h"
+#ifndef DEV
+	#pragma GCC diagnostic push
+	#pragma GCC diagnostic warning "-fpermissive"
+	#include "ext/json.h/json.c"
+	#pragma GCC diagnostic pop
+#endif
+
+struct jstring
+{
+	char *string;
+	uw length;
+
+	jstring(char *string, uw length) : string(string), length(length) {}
+
+	operator char*() {return string;}
+};
+
+struct json
+{
+	enum t
+	{
+		t_string,
+		t_number,
+		t_object,
+		t_object_elem,
+		t_array,
+		t_array_elem,
+		t_true,
+		t_false,
+		t_null,
+		t_value,
+
+		t_bool,
+	};
+
+	void *o;
+	t type;
+
+	json(json_value_s *jsv = null) : o((void*)jsv), type(t_value)
+	{
+		if(!o)
+			type = t_null;
+	}
+
+	json(void *o, t type = t_value) : o(o), type(type)
+	{
+		if(!o)
+			type = t_null;
+	}
+
+	bool is_string() {return !is_null() && type == t_string;}
+	bool is_number() {return !is_null() && type == t_number;}
+	bool is_object() {return !is_null() && type == t_object;}
+	bool is_object_elem() {return !is_null() && type == t_object_elem;}
+	bool is_array() {return !is_null() && type == t_array;}
+	bool is_array_elem() {return !is_null() && type == t_array_elem;}
+	bool is_true() {return type == t_true;}
+	bool is_false() {return type == t_false;}
+	bool is_bool() {return is_true() || is_false();}
+	bool is_null() {return !is_bool() && (!o || type == t_null);}
+	bool is_value() {return !is_null() && type == t_value;}
+
+	uw length()
+	{
+		if(is_string() || is_number() || is_object() || is_array())
+			return ((json_string_s*)o)->string_size;
+		else
+			return 0;
+	}
+
+	jstring string()
+	{
+		if(is_string())
+			return jstring((char*)((json_string_s*)o)->string, length());
+		elif(is_number())
+			return jstring((char*)((json_number_s*)o)->number, length());
+		elif(is_object_elem())
+			return json((void*)((json_object_element_s*)o)->name, t_string).string();
+		else
+			return jstring(null, 0);
+	}
+
+	f8 number()
+	{
+		extern f8 atof(const char* str);
+
+		if(is_string() || is_number())
+			return atof(string());
+		else
+			return 0.0 / 0.0;
+	}
+
+	json value()
+	{
+		if(is_object_elem())
+			return json((json_value_s*)((json_object_element_s*)o)->value);
+		elif(is_array_elem())
+			return json((json_value_s*)((json_array_element_s*)o)->value);
+		elif(is_value())
+		{
+			json_value_s *jsv = (json_value_s*)o;
+			t type;
+
+			if(jsv->type == json_type_string)
+				type = t_string;
+			elif(jsv->type == json_type_number)
+				type = t_number;
+			elif(jsv->type == json_type_object)
+				type = t_object;
+			elif(jsv->type == json_type_array)
+				type = t_array;
+			elif(jsv->type == json_type_true)
+				type = t_true;
+			elif(jsv->type == json_type_false)
+				type = t_false;
+			else
+				type = t_null;
+
+			return json((void*)jsv->payload, type);
+		}
+		else
+			return json((json_value_s*)null);
+	}
+
+	// Actual value of object and array elems.
+	json payload()
+	{
+		return value().value();
+	}
+
+	bool has_next()
+	{
+		if(is_object_elem())
+			return ((json_object_element_s*)o)->next != null;
+		elif(is_array_elem())
+			return ((json_array_element_s*)o)->next != null;
+		elif(is_object())
+			return ((json_object_s*)o)->start != null;
+		elif(is_array())
+			return ((json_array_s*)o)->start != null;
+		else
+			return false;
+	}
+
+	json next()
+	{
+		if(is_object_elem())
+			return json((void*)((json_object_element_s*)o)->next, t_object_elem);
+		elif(is_array_elem())
+			return json((void*)((json_array_element_s*)o)->next, t_array_elem);
+		elif(is_object())
+			return json((void*)((json_object_s*)o)->start, t_object_elem);
+		elif(is_array())
+			return json((void*)((json_array_s*)o)->start, t_array_elem);
+		else
+			return json((json_value_s*)null);
+	}
+
+	bool obj_is(const char *name)
+	{
+		return is_object_elem() && string() && streq(string(), name);
+	}
+
+	bool obj_is(t value_type)
+	{
+		if(!is_object_elem())
+			return false;
+
+		json p = payload();
+		return p.type == value_type || (value_type == t_bool && p.is_bool());
+	}
+
+	bool obj_is(const char *name, t value_type)
+	{
+		return obj_is(name) && obj_is(value_type);
+	}
+
+	bool is_comment()
+	{
+		return obj_is("comment");
+	}
+
+	bool is_var_def()
+	{
+		return is_object_elem() && string() && streq(string(), "var")
+			&& payload().is_object() && payload().next().string();
+	}
+
+	bool is_var_ref()
+	{
+		return is_object() && next().string() && streq(next().string(), "ref")
+			&& next().payload().is_string() && next().payload().string();
+	}
+
+	void p(bool comma = false, bool space = false)
+	{
+		if(comma)
+			std::cout << ",";
+
+		if(space)
+			std::cout << " ";
+
+		if(is_string())
+			std::cout << "\"" << string() << "\"";
+		elif(is_number())
+			std::cout << number();
+		elif(is_object())
+		{
+			std::cout << "{";
+			if(has_next())
+				next().p();
+			std::cout << "}";
+		}
+		elif(is_object_elem())
+		{
+			std::cout << "\"" << string() << "\":";
+			value().p();
+			if(has_next())
+				next().p(true, true);
+			else
+				std::cout << "";
+		}
+		elif(is_array())
+		{
+			std::cout << "[";
+			if(has_next())
+				next().p();
+			std::cout << "]";
+		}
+		elif(is_array_elem())
+		{
+			value().p();
+			if(has_next())
+				next().p(true, true);
+			else
+				std::cout << "";
+		}
+		elif(is_true())
+			std::cout << "true";
+		elif(is_false())
+			std::cout << "false";
+		elif(is_null())
+			std::cout << "null";
+		elif(is_value())
+			value().p();
+	}
+};
+
+//
+struct config : public initialized_helper
+{
+	//
+	json defson;
+	json cmdson;
+	json fileson;
+
+	std::unordered_map<std::string, json> vars;
+
+	//
+	std::vector<std::string> configs;
+	bool config_reload = false;
+
+	//
+	std::unordered_map<std::string, mapping*> mappings_ds4;
+	std::vector<mapping*> mappings_enabled_ds4;
+
+	bool parse(json cfg)
+	{
+		if(!cfg.has_next())
+			return false;
+
+		std::unordered_map<std::string, json> vars;
+
+		auto def_vars =
+			[&](json o)
+			{
+				while(o.has_next())
+				{
+					o = o.next();
+
+					if(!o.is_var_def())
+						continue;
+
+					if(vars.count(std::string(o.payload().next().string())))
+						vars.erase(std::string(o.payload().next().string()));
+
+					vars.insert({
+						{std::string(o.payload().next().string()), o.payload().next().payload()}});
+				}
+			};
+
+		auto get_var =
+			[&vars](json o) -> json
+			{
+				if(o.is_var_ref())
+					if(vars.count(std::string(o.next().payload().string())))
+						return vars.at(std::string(o.next().payload().string()));
+					else
+					{
+						std::cerr << "Can't find referenced var '"
+							<< o.next().payload().string() << "'." << std::endl;
+
+						return json();
+					}
+				else
+					return o;
+			};
+
+		auto obj_is =
+			[&get_var](json o, const char *name, json::t type) -> bool
+			{
+				if(!o.obj_is(name))
+					return false;
+
+				json var = get_var(o.payload());
+
+				return var.type == type || (type == json::t::t_bool && var.is_bool());
+			};
+
+		auto get =
+			[&](json o, const char *name, json::t type, json *node = null) -> json
+			{
+				while(o.has_next())
+				{
+					o = o.next();
+
+					if(node)
+						*node = o;
+
+					if(obj_is(o, name, type))
+					{
+						return get_var(o.payload());
+					}
+				}
+
+				return json();
+			};
+
+		def_vars(cfg);
+
+		json j = cfg;
+
+		if(!(j = get(cfg, "config_paths", json::t_array)).is_null())
+		{
+			configs.clear();
+
+			while(j.has_next())
+			{
+				j = j.next();
+				if(j.payload().is_string())
+					configs.push_back(std::string(j.payload().string()));
+			}
+		}
+
+		if(!(j = get(cfg, "config_reload", json::t_bool)).is_null())
+			config_reload = j.is_true();
+
+		j = cfg;
+		while(j.has_next())
+		{
+			json m;
+			if((m = get(j, "mapping", json::t_object, &j)).is_null())
+				continue;
+
+			json jname = get(m, "name", json::t_string);
+			json jfordev = get(m, "for", json::t_string);
+			if(jname.is_null() || jfordev.is_null())
+				continue;
+
+			bool for_ds4 = streq(jfordev.string(), "ds4");
+			if(!for_ds4)
+				continue;
+
+			verbose(std::cout << "mapping: " << jname.string() << " "
+				<< jfordev.string() << std::endl);
+
+			device *dev;
+			if(for_ds4)
+				dev = new ds4_device();
+			dev->set_destroyed();
+
+			std::vector<mapping::group*> groups;
+
+			bool failure = true;
+			raii res([&]()
+				{
+					if(!failure)
+						return;
+
+					// TODO: Do the same for all the mappings defined in this iteration.
+					// It's not a big deal though, since they depend on to be enabled in
+					// config in 'mappings' array and will be overwritten next time.
+					for(auto i : groups)
+						delete i;
+				});
+
+			json g;
+			while(!(g = get(m, "group", json::t_object, &m)).is_null())
+			{
+				std::vector<mapping::cond*> conds;
+				json c;
+				while(!(c = get(g, "cond", json::t_object, &g)).is_null())
+				{
+					json jwhen = get(c, "when", json::t_string);
+					json jd0 = get(c, "do", json::t_string);
+					json jgreedy = get(c, "greedy", json::t_bool);
+
+					if(jwhen.is_null() || jd0.is_null()
+						|| !jwhen.string() || !jd0.string())
+					{
+						std::cerr << "config: empty 'when' or 'do' in '" << jname.string()
+							<< "' mapping." << std::endl;
+
+						continue;
+					}
+
+					verbose(std::cout << "cond: " << jwhen.string() << " ... "
+						<< jd0.string() << std::endl);
+
+					expr *when = null;
+					expr *d0 = null;
+					try
+					{
+						when = expr_parser::parse(jwhen.string(), *dev);
+						d0 = expr_parser::parse(jd0.string(), *dev);
+					}
+					catch(std::string s)
+					{
+						std::cerr << "config: error while parsing 'when' or 'do' in '"
+							<< jname.string() << "' mapping. The error: " << s
+							<< " 'when': '" << jwhen.string() << "', 'do': '" << jd0.string()
+							<< "'." << std::endl;
+
+						delete when;
+						delete d0;
+
+						return false;
+					}
+
+					conds.push_back(new mapping::cond(when, d0, jgreedy.is_true()));
+				}
+
+				if(conds.empty())
+					continue;
+
+				groups.push_back(new mapping::group(conds));
+			}
+
+			failure = false;
+
+			std::unordered_map<std::string, mapping*> *maps;
+			if(for_ds4)
+				maps = &mappings_ds4;
+
+			if(maps->count(std::string(jname.string())))
+			{
+				verbose(std::cout << "deleting existing " << jname.string()
+					<< std::endl);
+
+				delete maps->at(std::string(jname.string()));
+				maps->erase(std::string(jname.string()));
+			}
+
+			maps->insert({{std::string(jname.string()), new mapping(groups)}});
+
+			delete dev;
+		}
+
+		j = cfg;
+		if(!(j = get(cfg, "mappings", json::t_array)).is_null())
+		{
+			mappings_enabled_ds4.clear();
+
+			while(j.has_next())
+			{
+				j = j.next();
+				if(!j.payload().is_string())
+					continue;
+
+				if(mappings_ds4.count(std::string(j.payload().string())))
+					mappings_enabled_ds4.push_back(
+						mappings_ds4.at(std::string(j.payload().string())));
+				else
+				{
+					std::cerr << "config: 'mappings': mapping definition not found: '"
+						<< j.payload().string() << "'." << std::endl;
+
+					return false;
+				}
+			}
+		}
+
+		return true;
+	}
+
+	bool parse(const char *config, uw length, json &src)
+	{
+		json cfg(json_parse((void*)config, length));
+
+		if(parse(cfg.value()))
+			return &(src = cfg);
+
+		std::free(cfg.o);
+
+		return false;
+	}
+
+	bool def(const char *config, uw length)
+	{
+		return parse(config, length, defson);
+	}
+
+	bool cmd(const char *config, uw length)
+	{
+		return parse(config, length, cmdson);
+	}
+
+	bool file(const char *config, uw length)
+	{
+		return parse(config, length, fileson);
+	}
+
+	~config()
+	{
+		if(destroyed())
+			return;
+
+		set_destroyed();
+
+		std::free(defson.o);
+		defson.o = null;
+		defson.type = json::t_null;
+
+		std::free(cmdson.o);
+		cmdson.o = null;
+		cmdson.type = json::t_null;
+
+		std::free(fileson.o);
+		fileson.o = null;
+		fileson.type = json::t_null;
+
+		for(auto const &i : mappings_ds4)
+			delete i.second;
+	}
+};
+
+struct ds4tux : public initialized_helper
+{
+	//
+	struct first_time_init
+	{
+		static bool initialized()
+		{
+			return _initialized;
+		}
+
+		static void set_initialized()
+		{
+			_initialized = true;
+		}
+
+	private:
+		static bool _initialized;
+	};
+
+	//
+	config cfg;
+
+	myudev md;
+
+	std::unordered_map<std::string, device*> devices;
+
+	bool init(const char *args = null)
+	{
+		//
+		if(initialized())
+			return false;
+
+		//
+		if(!cfg.def(config_default, sizeof(config_default)))
+		{
+			std::cerr << "Can't parse default config." << std::endl;
+
+			return false;
+		}
+
+		if(args && !cfg.cmd(args, std::strlen(args)))
+		{
+			std::cerr << "Can't parse command line arguments." << std::endl;
+
+			return false;
+		}
+
+		//
+		if(!md.init())
+		{
+			std::cerr << "Failed to initialize udev." << std::endl;
+
+			return false;
+		}
+
+		//
+		set_initialized();
+
+		return true;
+	}
+
+	void tick()
+	{
+		verbose(
+			auto verbosedev = [](myudev::dev_info di, const char *act)
+			{
+				std::cout << act
+					<< " " << di.vid << ";"
+					<< " " << di.pid << ";"
+					<< " " << di.serial << ";"
+					<< " " << di.name << ";"
+					<< " node: " << di.dev_node << ";"
+					<< " input: " << di.input_node << ";"
+					<< " event: " << di.event_node << ";"
+					<< " " << di.manufacturer << ";"
+					<< " " << di.product << ";"
+					<< " " << di.release_number << ";"
+					<< " " << di.interface_number << ";"
+					;
+				if(ds4_device::is_ds4(di.vid, di.pid, di.name.c_str()))
+					std::cout << ". Got ds4! " << di.pid;
+				std::cout << std::endl;
+				std::cout << "-------------------------" << std::endl;
+			};
+
+			myudev::on_dev_change_sig verbosedadd =
+			[&verbosedev](myudev::dev_info di)
+			{
+				verbosedev(di, "add");
+			};
+
+			myudev::on_dev_change_sig verbosedrem =
+			[&verbosedev](myudev::dev_info di)
+			{
+				verbosedev(di, "rem");
+			};);
+
+		myudev::on_dev_change_sig dadd =
+			[&, this](myudev::dev_info di)
+			{
+				verbose(verbosedadd(di));
+
+				if(!ds4_device::is_ds4(di.vid, di.pid, di.name.c_str()))
+					return;
+
+				ds4_device *d = new ds4_device(di, cfg.mappings_enabled_ds4);
+
+				if(devices.count(d->id()))
+				{
+					std::cerr << "Already in list: " << d->devinfo.dev_node << ". Wtf?"
+						<< std::endl;
+
+					d->set_destroyed();
+					delete d;
+
+					return;
+				}
+
+				devices.insert({{d->id(), d}});
+
+				d->init();
+				sleep_ms(500);
+				d->control();
+			};
+
+		myudev::on_dev_change_sig drem =
+			[&, this](myudev::dev_info di)
+			{
+				verbose(verbosedrem(di));
+
+//				if(!ds4_device::is_ds4(di.vid, di.pid, di.name.c_str()))
+//					return;
+
+				ds4_device d(di, cfg.mappings_enabled_ds4);
+				d.set_destroyed();
+
+				if(!devices.count(d.id()))
+					return;
+
+				device *orig = devices.at(d.id());
+				if(orig)
+				{
+					devices.erase(orig->id());
+
+					delete orig;
+				}
+			};
+
+		md.poll(dadd, drem);
+
+		for(auto i = devices.begin(); i != devices.end();)
+			if(!i->second->init() || i->second->destroyed())
+				delete i->second, i = devices.erase(i);
+			else
+			{
+				i->second->tick();
+
+				++i;
+			}
+	}
+
+	void start()
+	{
+		;
+	}
+
+	void destroy()
+	{
+		if(destroyed())
+			return;
+
+		verbose(std::cout << "d4t.destroy()" << std::endl);
+
+		for(auto i = devices.begin(); i != devices.end();)
+			delete i->second, i = devices.erase(i);
+
+		md.destroy();
+
+		set_destroyed();
+	}
+
+	~ds4tux()
+	{
+		destroy();
+	}
+};
+
+// This shit still?!
+bool ds4tux::first_time_init::_initialized = false;
+
+//
+#include <csignal>
+
+bool quit = false;
+bool reload = false;
+
+void sigint(int sig)
+{
+	(void)sig;
+
+	quit = true;
+}
+
+void sighup(int sig)
+{
+	(void)sig;
+
+	reload = true;
+	std::cout << "reload" << std::endl;
+}
+
+char* process_args(int argc, const char **argv)
+{
+	if(argc > 1
+		 && (streq("h", argv[1]) || streq("help", argv[1])
+				 || streq("-h", argv[1]) || streq("--h", argv[1])
+				 || streq("-help", argv[1]) || streq("--help", argv[1])))
+	{
+		std::cout << "Help me!" << std::endl;
+
+		std::exit(0);
+	}
+
+	uw arglen = 0;
+	for(int i = 1; i < argc; i++)
+		arglen += std::strlen(argv[i]);
+
+	if(!arglen)
+		return null;
+
+	++arglen;
+	auto args = new char[arglen];
+	for(int i = 1, j = 0; i < argc; i++)
+	{
+		uw l = std::strlen(argv[i]);
+		std::memcpy(args + j, argv[i], l);
+		j += l;
+	}
+
+	return args;
+}
+
 int main(int argc, const char **argv)
 {
 	signal(SIGINT, sigint);
 	signal(SIGHUP, sighup);
 	signal(SIGQUIT, sighup);
 
-	ds4_device d;
-	d.set_destroyed();
-	d.readings[33].val = 1;
-	d.readings[32].val = -2;
+//	ds4_device d;
+//	d.set_destroyed();
+//	d.readings[33].val = 1;
+//	d.readings[32].val = -2;
 
-	while(true)
-	{
-		std::cout << "> ";
-		std::string in;
-		std::getline(std::cin, in);
-		if(!in.size())
-			break;
-		try
-		{
-			expr *ex = expr_parser::parse(in.c_str(), d);
-			s8 r = ex->eval(d);
-			std::cout << r << std::endl;
-			delete ex;
-		}
-		catch(std::string s) {std::cout << s << std::endl;}
-		catch(const char *s) {std::cout << s << std::endl;}
-	}
+//	while(true)
+//	{
+//		std::cout << "> ";
+//		std::string in;
+//		std::getline(std::cin, in);
+//		if(!in.size())
+//			break;
+//		try
+//		{
+//			expr *ex = expr_parser::parse(in.c_str(), d);
+//			s8 r = ex->eval(d);
+//			std::cout << r << std::endl;
+//			delete ex;
+//		}
+//		catch(std::string s) {std::cout << s << std::endl;}
+//		catch(const char *s) {std::cout << s << std::endl;}
+//	}
 
-	exit(0);
+//	exit(0);
 
 	ds4tux d4t;
-	d4t.init(process_args(argc, argv));
+	if(!d4t.init(process_args(argc, argv)))
+		exit(0);
 	ds4tux::first_time_init::set_initialized();
 	d4t.start();
 	while(!quit)
 	{
-		;
-
-		static u8 t = 0;
-		stopwatch(t);
 		d4t.tick();
 		if(d4t.devices.size())
 			sleep_ms(2);
