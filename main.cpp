@@ -61,8 +61,6 @@ const char config_default[] = R"biteme!(
 			'version': 272
 		}},
 
-	'mapping':{'name':'default','for':'ds4'},
-
 	'comment': 'Example default DS4 mapping.',
 	'mapping':
 	{
@@ -73,6 +71,11 @@ const char config_default[] = R"biteme!(
 
 		'comment': 'Pretend we are a real thing.',
 		'masquerade': {'ref': 'ds4_usb_masq'},
+
+		'group':
+		[
+			{'when':'circle != prev_circle', 'do':'set($t timer());set($circle circle)'}
+		],
 
 		'group':
 		[
@@ -91,7 +94,18 @@ const char config_default[] = R"biteme!(
 
 		'group':
 		[
+			{'when':'triangle != prev_triangle', 'do':'post(EV_KEY BTN_X triangle);post(EV_SYN SYN_REPORT 0)'},
+			{'when':'set($v r1) != prev_r1', 'do':'post_syn(EV_KEY BTN_Z $v)'}
+		],
+
+		'group':
+		[
 			{'when':'battery != prev_battery | usb != prev_usb', 'do':'print("--- battery: " + str((battery*100) / (usb ? 11 : 9)) + "\n")'}
+		],
+
+		'group':
+		[
+			{'when':'$circle', 'do':'print("--- d: " + str(timer() - $t) + "\n")'}
 		],
 
 		'comment':
@@ -413,11 +427,17 @@ u8 now_ms()
 	return now() / 1000000;
 }
 
-u8 stopwatch(u8 &initial)
+u8 timer()
 {
 	timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
-	u8 raw = (ts.tv_sec * 1000000000) + (ts.tv_nsec);
+
+	return (ts.tv_sec * 1000000000) + (ts.tv_nsec);
+}
+
+u8 stopwatch(u8 &initial)
+{
+	u8 raw = timer();
 
 	if(!initial)
 		initial = raw;
@@ -833,7 +853,22 @@ struct myudev : public initialized_helper
 
 struct uinput
 {
-	;
+	typedef int evdevt;
+
+	static evdevt type(const char *name)
+	{
+		return libevdev_event_type_from_name(name);
+	}
+
+	static evdevt code(evdevt type, const char *name)
+	{
+		return libevdev_event_code_from_name(type, name);
+	}
+
+	static bool valid(evdevt type_or_code)
+	{
+		return type_or_code != -1;
+	}
 };
 
 //
@@ -867,7 +902,7 @@ struct device;
 
 struct expr : public initialized_helper
 {
-	virtual s8 eval(device &d) = 0;
+	virtual s8 eval(device &d, s8 &env) = 0;
 
 	virtual ~expr()
 	{
@@ -926,8 +961,10 @@ struct mapping : public initialized_helper
 
 	std::vector<group*> groups;
 
-	mapping(std::vector<group*> groups)
-		: groups(groups)
+	const uw env_size;
+
+	mapping(std::vector<group*> groups, uw env_size)
+		: groups(groups), env_size(env_size)
 	{
 		set_initialized();
 	}
@@ -948,8 +985,10 @@ struct mapping : public initialized_helper
 struct device : public initialized_helper
 {
 	myudev::dev_info devinfo;
+
 	std::vector<mapping*> mappings;
 	mapping *current_mapping = null;
+	s8 *expr_env = null;
 
 	device()
 	{
@@ -961,7 +1000,12 @@ struct device : public initialized_helper
 		: devinfo(devinfo), mappings(mappings)
 	{
 		if(mappings.size())
+		{
 			current_mapping = mappings[0];
+
+			expr_env = new s8[current_mapping->env_size];
+			std::memset((void*)expr_env, 0, current_mapping->env_size * sizeof(s8));
+		}
 	}
 
 	virtual bool init() = 0;
@@ -1009,9 +1053,9 @@ struct device : public initialized_helper
 		{
 			mapping::cond **c = &g[i]->conditions[0];
 			for(uw j = 0; j < g[i]->conditions.size(); j++)
-				if(c[j]->when->eval(*this))
+				if(c[j]->when->eval(*this, *expr_env))
 				{
-					c[j]->d0->eval(*this);
+					c[j]->d0->eval(*this, *expr_env);
 
 					if(c[j]->greedy)
 						break;
@@ -1019,9 +1063,21 @@ struct device : public initialized_helper
 		}
 	}
 
+	virtual void destroy()
+	{
+		if(!initialized() || destroyed())
+			return;
+
+		set_destroyed();
+
+		current_mapping = null;
+
+		delete[] expr_env, expr_env = null;
+	}
+
 	virtual ~device()
 	{
-		;
+		destroy();
 	}
 };
 
@@ -1256,7 +1312,7 @@ struct ds4_device : public device
 			readings[i].read(devinfo.usb ? buf : buf + 2);
 	}
 
-	void destroy()
+	void destroy() override
 	{
 		if(!initialized() || destroyed())
 			return;
@@ -1279,7 +1335,7 @@ struct ds4_device : public device
 		if(eventfd != -1)
 			close(eventfd), eventfd = -1;
 
-		set_destroyed();
+		device::destroy();
 	}
 
 	virtual ~ds4_device()
@@ -1302,16 +1358,16 @@ struct expr_parser
 {
 	struct expr_anon : public expr
 	{
-		std::function<s8 (device&)> f;
+		std::function<s8 (device&, s8&)> f;
 
-		expr_anon(std::function<s8 (device&)> f) : f(f)
+		expr_anon(std::function<s8 (device&, s8&)> f) : f(f)
 		{
 			;
 		}
 
-		s8 eval(device &d) override
+		s8 eval(device &d, s8 &env) override
 		{
-			return f(d);
+			return f(d, env);
 		}
 
 		virtual ~expr_anon()
@@ -1324,17 +1380,17 @@ struct expr_parser
 	{
 		expr &right;
 
-		std::function<s8 (expr &right, device&)> f;
+		std::function<s8 (expr &right, device&, s8&)> f;
 
-		expr_unary(expr &right, std::function<s8 (expr &right, device&)> f)
+		expr_unary(expr &right, std::function<s8 (expr &right, device&, s8&)> f)
 			: right(right), f(f)
 		{
 			;
 		}
 
-		s8 eval(device &d) override
+		s8 eval(device &d, s8 &env) override
 		{
-			return f(right, d);
+			return f(right, d, env);
 		}
 
 		virtual ~expr_unary()
@@ -1353,17 +1409,17 @@ struct expr_parser
 		expr &left;
 		expr &right;
 
-		std::function<s8 (expr &left, expr &right, device&)> f;
+		std::function<s8 (expr &left, expr &right, device&, s8&)> f;
 
-		expr_binary(expr &left, expr &right, std::function<s8 (expr &left, expr &right, device&)> f)
+		expr_binary(expr &left, expr &right, std::function<s8 (expr &left, expr &right, device&, s8&)> f)
 			: left(left), right(right), f(f)
 		{
 			;
 		}
 
-		s8 eval(device &d) override
+		s8 eval(device &d, s8 &env) override
 		{
-			return f(left, right, d);
+			return f(left, right, d, env);
 		}
 
 		virtual ~expr_binary()
@@ -1384,17 +1440,17 @@ struct expr_parser
 		expr &right;
 		expr &ternary;
 
-		std::function<s8 (expr &left, expr &right, expr &ternary, device&)> f;
+		std::function<s8 (expr &left, expr &right, expr &ternary, device&, s8&)> f;
 
-		expr_ternary(expr &left, expr &right, expr &ternary, std::function<s8 (expr &left, expr &right, expr &ternary, device&)> f)
+		expr_ternary(expr &left, expr &right, expr &ternary, std::function<s8 (expr &left, expr &right, expr &ternary, device&, s8&)> f)
 			: left(left), right(right), ternary(ternary), f(f)
 		{
 			;
 		}
 
-		s8 eval(device &d) override
+		s8 eval(device &d, s8 &env) override
 		{
-			return f(left, right, ternary, d);
+			return f(left, right, ternary, d, env);
 		}
 
 		virtual ~expr_ternary()
@@ -1416,11 +1472,11 @@ struct expr_parser
 	{
 		expr *arr[N] = {0};
 
-		std::function<s8 (expr *arr[N], device&)> f;
+		std::function<s8 (expr *arr[N], device&, s8&)> f;
 
-		s8 eval(device &d) override
+		s8 eval(device &d, s8 &env) override
 		{
-			return f(arr, d);
+			return f(arr, d, env);
 		}
 
 		virtual ~expr_func()
@@ -1476,20 +1532,23 @@ struct expr_parser
 		prefix,
 	};
 
-	static expr* parse(const char *input, device &dev)
+	static expr* parse(const char *input, device &dev
+		, std::unordered_map<std::string, uw> &env)
 	{
-		return expr_parser(input, dev).parse();
+		return expr_parser(input, dev, env).parse();
 	}
 
 	const char *input;
 	const uw input_len;
 
 	device &dev;
+	std::unordered_map<std::string, uw> &env;
 
 	uw lex_idx = 0;
 
-	expr_parser(const char *input, device &dev)
-		: input(input), input_len(std::strlen(input)), dev(dev)
+	expr_parser(const char *input, device &dev
+		, std::unordered_map<std::string, uw> &env)
+		: input(input), input_len(std::strlen(input)), dev(dev), env(env)
 	{
 		;
 	}
@@ -1505,9 +1564,10 @@ struct expr_parser
 					|| c == '?' || c == ':' || c == '>' || c == '<' || c == '&'
 					|| c == '|' || c == '\'' || c == '\"' || c == ';')
 				return {c, std::string(), 0};
-			elif(std::isalpha(c))
+			elif(std::isalpha(c) || c == '$' || c == '_')
 			{
 				uw start = lex_idx - 1;
+				++lex_idx;
 				while(lex_idx < input_len)
 					if(!std::isalnum(input[lex_idx]) && input[lex_idx] != '_')
 						break;
@@ -1585,6 +1645,49 @@ struct expr_parser
 		return -1;
 	}
 
+	expr* parse_var(std::string var, bool addr = false)
+	{
+		if(var.at(0) == '$')
+		{
+			if(!env.count(var))
+				env.insert({{var, env.size()}});
+
+			uw idx = env.at(var);
+
+			if(!addr)
+				return new expr_anon([idx](device&, s8 &env)
+					{return (&env)[idx];});
+			else
+				return new expr_anon([idx](device&, s8 &env)
+					{return (s8)&(&env)[idx];});
+		}
+		else
+		{
+			bool prev_val = strstarts(var.c_str(), "prev_");
+
+			sw reading_idx =
+				dev.reading_index(prev_val ? var.c_str() + 5 : var.c_str());
+
+			if(reading_idx == -1)
+				throw "expr_parser: unknown device reading: '" + var + "'.";
+
+			if(!addr)
+				if(!prev_val)
+					return new expr_anon([reading_idx](device &d, s8&)
+						{return d.get_reading(reading_idx).val;});
+				else
+					return new expr_anon([reading_idx](device &d, s8&)
+						{return d.get_reading(reading_idx).prev;});
+			else
+				if(!prev_val)
+					return new expr_anon([reading_idx](device &d, s8&)
+						{return (s8)&d.get_reading(reading_idx).val;});
+				else
+					return new expr_anon([reading_idx](device &d, s8&)
+						{return (s8)&d.get_reading(reading_idx).prev;});
+		}
+	}
+
 	expr* parse(int precedence, bool nothrow = false)
 	{
 		tok t = consume();
@@ -1615,7 +1718,7 @@ struct expr_parser
 
 		elif(t.is_sepa() && c == '(')
 		{
-			left = parse();
+			left = parse(0);
 
 			if((t = consume()).sepa != ')')
 				throw std::string("expr_parser: can't parse parens: expected ')'.");
@@ -1624,19 +1727,19 @@ struct expr_parser
 		{
 			right = parse(scast<int>(expr_parser::precedence::prefix));
 			left = new expr_unary(*right,
-				[](expr &right, device &d){return std::abs(right.eval(d));});
+				[](expr &right, device &d, s8 &env){return std::abs(right.eval(d, env));});
 		}
 		elif(t.is_sepa() && c == '-')
 		{
 			right = parse(scast<int>(expr_parser::precedence::prefix));
 			left = new expr_unary(*right,
-				[](expr &right, device &d){return -right.eval(d);});
+				[](expr &right, device &d, s8 &env){return -right.eval(d, env);});
 		}
 		elif(t.is_sepa() && c == '!')
 		{
 			right = parse(scast<int>(expr_parser::precedence::prefix));
 			left = new expr_unary(*right,
-				[](expr &right, device &d){return !right.eval(d);});
+				[](expr &right, device &d, s8 &env){return !right.eval(d, env);});
 		}
 
 		elif(t.is_symbol())
@@ -1653,25 +1756,50 @@ struct expr_parser
 
 				elif(!name.compare("str"))
 				{
-					right = parse();
+					right = parse(0);
 					left = new expr_unary(*right,
-						[](expr &right, device &d)
+						[](expr &right, device &d, s8 &env)
 						{
-							s8 e = right.eval(d);
+							s8 e = right.eval(d, env);
 							std::string &s = *(new std::string(std::to_string(e)));
 
 							return (s8)&s;
 						});
 				}
 
+				elif(!name.compare("set"))
+				{
+					if(!lookahead().is_symbol())
+						throw
+							std::string("expr_parser: call to set(var_name value): expected 2 arguments.");
+
+					auto *f = new expr_func<2>();
+					left = f;
+					f->arr[0] = parse_var((t = consume()).symbol, true);
+					f->arr[1] = parse(0, true);
+
+					if(!f->arr[0] || !f->arr[1])
+						throw
+							std::string("expr_parser: call to set(var_name value): expected 2 arguments.");
+
+					f->f =
+						[](expr *arr[], device &d, s8 &env)
+						{
+							s8 *v = (s8*)arr[0]->eval(d, env);
+
+							return *v = arr[1]->eval(d, env);
+						};
+				}
+
 				elif(!name.compare("print"))
 				{
-					right = parse();
+					right = parse(0);
 					left = new expr_unary(*right,
-						[](expr &right, device &d)
+						[](expr &right, device &d, s8 &env)
 						{
-							std::string &s = *(std::string*)right.eval(d);
+							std::string &s = *(std::string*)right.eval(d, env);
 							std::cout << s;
+							std::flush(std::cout);
 							delete &s;
 
 							return 1;
@@ -1680,11 +1808,11 @@ struct expr_parser
 
 				elif(!name.compare("exec"))
 				{
-					right = parse();
+					right = parse(0);
 					left = new expr_unary(*right,
-						[](expr &right, device &d)
+						[](expr &right, device &d, s8 &env)
 						{
-							std::string &s = *(std::string*)right.eval(d);
+							std::string &s = *(std::string*)right.eval(d, env);
 							int r = std::system(s.c_str());
 							delete &s;
 
@@ -1695,9 +1823,18 @@ struct expr_parser
 				elif(!name.compare("now"))
 				{
 					left = new expr_anon(
-						[](device&)
+						[](device&, s8&)
 						{
 							return (s8)now_ms();
+						});
+				}
+
+				elif(!name.compare("timer"))
+				{
+					left = new expr_anon(
+						[](device&, s8&)
+						{
+							return (s8)timer();
 						});
 				}
 
@@ -1714,12 +1851,12 @@ struct expr_parser
 							std::string("expr_parser: call to led_rgb(r g b): expected 3 arguments.");
 
 					f->f =
-						[](expr *arr[], device &d)
+						[](expr *arr[], device &d, s8 &env)
 						{
 							std::cout << "led_rgb("
-								<< arr[0]->eval(d) << " "
-								<< arr[1]->eval(d) << " "
-								<< arr[2]->eval(d) << ")\n";
+								<< arr[0]->eval(d, env) << " "
+								<< arr[1]->eval(d, env) << " "
+								<< arr[2]->eval(d, env) << ")\n";
 
 							return 1;
 						};
@@ -1737,14 +1874,55 @@ struct expr_parser
 							std::string("expr_parser: call to led_flash(on off): expected 2 arguments.");
 
 					f->f =
-						[](expr *arr[], device &d)
+						[](expr *arr[], device &d, s8 &env)
 						{
 							std::cout << "led_flash("
-								<< arr[0]->eval(d) << " "
-								<< arr[1]->eval(d) << ")\n";
+								<< arr[0]->eval(d, env) << " "
+								<< arr[1]->eval(d, env) << ")\n";
 
 							return 1;
 						};
+				}
+
+				elif(!name.compare("post") || !name.compare("post_syn"))
+				{
+					if(!lookahead().is_symbol() || !lookahead(2).is_symbol())
+						throw
+							std::string("expr_parser: call to post(type code value): expected 3 arguments.");
+
+					uinput::evdevt type = uinput::type((t = consume()).symbol.c_str());
+					if(!uinput::valid(type))
+						throw
+							std::string("expr_parser: call to post(type code value): invalid type '" + t.symbol + "'.");
+
+					uinput::evdevt code = uinput::code(type, (t = consume()).symbol.c_str());
+					if(!uinput::valid(code))
+						throw
+							std::string("expr_parser: call to post(type code value): invalid code '" + t.symbol + "'.");
+
+					auto *f = new expr_func<1>();
+					left = f;
+					f->arr[0] = parse(0, true);
+
+					if(!f->arr[0])
+						throw
+							std::string("expr_parser: call to post(type code value): expected 3 arguments.");
+
+					if(name.compare("post_syn"))
+						f->f =
+							[type, code](expr *arr[], device &d, s8 &env)
+							{
+								return libevdev_uinput_write_event(0, type, code, arr[0]->eval(d, env)) == 0 ? 1 : 0;
+							};
+					else
+						f->f =
+							[type, code](expr *arr[], device &d, s8 &env)
+							{
+								bool r = libevdev_uinput_write_event(0, type, code, arr[0]->eval(d, env)) == 0 ? 1 : 0;
+								libevdev_uinput_write_event(0, EV_SYN, SYN_REPORT, 0);
+
+								return r;
+							};
 				}
 
 				else
@@ -1758,20 +1936,7 @@ struct expr_parser
 			//
 			else
 			{
-				bool prev_val = strstarts(t.symbol.c_str(), "prev_");
-
-				sw reading_idx =
-					dev.reading_index(prev_val ? t.symbol.c_str() + 5 : t.symbol.c_str());
-
-				if(reading_idx == -1)
-					throw "expr_parser: unknown device reading: '" + t.symbol + "'.";
-
-				if(!prev_val)
-					left = new expr_anon([reading_idx](device &d)
-						{return d.get_reading(reading_idx).val;});
-				else
-					left = new expr_anon([reading_idx](device &d)
-						{return d.get_reading(reading_idx).prev;});
+				left = parse_var(t.symbol);
 			}
 		}
 
@@ -1779,7 +1944,7 @@ struct expr_parser
 		{
 			s8 num = t.num;
 
-			left = new expr_anon([num](device&){return num;});
+			left = new expr_anon([num](device&, s8&){return num;});
 		}
 
 		elif(t.is_sepa() && (c == '\'' || c == '\"'))
@@ -1814,7 +1979,7 @@ struct expr_parser
 			*tmp = '\0';
 
 			std::string res(buf);
-			left = new expr_anon([res](device&){return (s8)new std::string(res);});
+			left = new expr_anon([res](device&, s8&){return (s8)new std::string(res);});
 			left_string = true;
 		}
 
@@ -1837,18 +2002,18 @@ struct expr_parser
 				right = parse(0, true);
 
 				left = new expr_binary(*left, *right,
-					[](expr &left, expr &right, device &d)
+					[](expr &left, expr &right, device &d, s8 &env)
 					{
-						s8 r = left.eval(d);
+						s8 r = left.eval(d, env);
 
-						return &right ? right.eval(d) : r;
+						return &right ? right.eval(d, env) : r;
 					});
 			}
 
 			elif(c == '?')
 			{
 				// Then.
-				right = parse();
+				right = parse(0);
 
 				if((t = consume()).sepa != ':')
 					throw
@@ -1860,27 +2025,31 @@ struct expr_parser
 				ternary = parse(scast<int>(expr_parser::precedence::condition) - 1);
 
 				left = new expr_ternary(*left, *right, *ternary,
-					[](expr &left, expr &right, expr &ternary, device &d){return (left.eval(d) ? right.eval(d) : ternary.eval(d));});
+					[](expr &left, expr &right, expr &ternary, device &d, s8 &env)
+						{return (left.eval(d, env) ? right.eval(d, env) : ternary.eval(d, env));});
 			}
 
 			elif(c == '|')
 			{
 				right = parse(scast<int>(expr_parser::precedence::logic_or));
 				left = new expr_binary(*left, *right,
-					[](expr &left, expr &right, device &d){return left.eval(d) || right.eval(d);});
+					[](expr &left, expr &right, device &d, s8 &env)
+						{return left.eval(d, env) || right.eval(d, env);});
 			}
 			elif(c == '&')
 			{
 				right = parse(scast<int>(expr_parser::precedence::logic_and));
 				left = new expr_binary(*left, *right,
-					[](expr &left, expr &right, device &d){return left.eval(d) && right.eval(d);});
+					[](expr &left, expr &right, device &d, s8 &env)
+						{return left.eval(d, env) && right.eval(d, env);});
 			}
 
 			elif(c == '=')
 			{
 				right = parse(scast<int>(expr_parser::precedence::relational_eq_ne));
 				left = new expr_binary(*left, *right,
-					[](expr &left, expr &right, device &d){return left.eval(d) == right.eval(d);});
+					[](expr &left, expr &right, device &d, s8 &env)
+						{return left.eval(d, env) == right.eval(d, env);});
 			}
 			elif(c == '!' && lookahead().sepa == '=')
 			{
@@ -1888,7 +2057,8 @@ struct expr_parser
 
 				right = parse(scast<int>(expr_parser::precedence::relational_eq_ne));
 				left = new expr_binary(*left, *right,
-					[](expr &left, expr &right, device &d){return left.eval(d) != right.eval(d);});
+					[](expr &left, expr &right, device &d, s8 &env)
+						{return left.eval(d, env) != right.eval(d, env);});
 			}
 
 			elif(c == '>' && lookahead().sepa == '=')
@@ -1897,7 +2067,8 @@ struct expr_parser
 
 				right = parse(scast<int>(expr_parser::precedence::relational_gt_lt));
 				left = new expr_binary(*left, *right,
-					[](expr &left, expr &right, device &d){return left.eval(d) >= right.eval(d);});
+					[](expr &left, expr &right, device &d, s8 &env)
+						{return left.eval(d, env) >= right.eval(d, env);});
 			}
 			elif(c == '<' && lookahead().sepa == '=')
 			{
@@ -1905,19 +2076,22 @@ struct expr_parser
 
 				right = parse(scast<int>(expr_parser::precedence::relational_gt_lt));
 				left = new expr_binary(*left, *right,
-					[](expr &left, expr &right, device &d){return left.eval(d) <= right.eval(d);});
+					[](expr &left, expr &right, device &d, s8 &env)
+						{return left.eval(d, env) <= right.eval(d, env);});
 			}
 			elif(c == '>')
 			{
 				right = parse(scast<int>(expr_parser::precedence::relational_gt_lt));
 				left = new expr_binary(*left, *right,
-					[](expr &left, expr &right, device &d){return left.eval(d) > right.eval(d);});
+					[](expr &left, expr &right, device &d, s8 &env)
+						{return left.eval(d, env) > right.eval(d, env);});
 			}
 			elif(c == '<')
 			{
 				right = parse(scast<int>(expr_parser::precedence::relational_gt_lt));
 				left = new expr_binary(*left, *right,
-					[](expr &left, expr &right, device &d){return left.eval(d) < right.eval(d);});
+					[](expr &left, expr &right, device &d, s8 &env)
+						{return left.eval(d, env) < right.eval(d, env);});
 			}
 
 			elif(c == '+')
@@ -1925,13 +2099,14 @@ struct expr_parser
 				right = parse(scast<int>(expr_parser::precedence::add_sub));
 				if(!left_string)
 					left = new expr_binary(*left, *right,
-						[](expr &left, expr &right, device &d){return left.eval(d) + right.eval(d);});
+						[](expr &left, expr &right, device &d, s8 &env)
+							{return left.eval(d, env) + right.eval(d, env);});
 				else
 					left = new expr_binary(*left, *right,
-						[](expr &left, expr &right, device &d)
+						[](expr &left, expr &right, device &d, s8 &env)
 						{
-							std::string *l = (std::string*)left.eval(d);
-							std::string *r = (std::string*)right.eval(d);
+							std::string *l = (std::string*)left.eval(d, env);
+							std::string *r = (std::string*)right.eval(d, env);
 
 							std::string *res = &(new std::string(*l))->append(*r);
 
@@ -1945,26 +2120,30 @@ struct expr_parser
 			{
 				right = parse(scast<int>(expr_parser::precedence::add_sub));
 				left = new expr_binary(*left, *right,
-					[](expr &left, expr &right, device &d){return left.eval(d) - right.eval(d);});
+					[](expr &left, expr &right, device &d, s8 &env)
+						{return left.eval(d, env) - right.eval(d, env);});
 			}
 
 			elif(c == '*')
 			{
 				right = parse(scast<int>(expr_parser::precedence::mul_div));
 				left = new expr_binary(*left, *right,
-					[](expr &left, expr &right, device &d){return left.eval(d) * right.eval(d);});
+					[](expr &left, expr &right, device &d, s8 &env)
+						{return left.eval(d, env) * right.eval(d, env);});
 			}
 			elif(c == '/')
 			{
 				right = parse(scast<int>(expr_parser::precedence::mul_div));
 				left = new expr_binary(*left, *right,
-					[](expr &left, expr &right, device &d){return left.eval(d) / right.eval(d);});
+					[](expr &left, expr &right, device &d, s8 &env)
+						{return left.eval(d, env) / right.eval(d, env);});
 			}
 			elif(c == '%')
 			{
 				right = parse(scast<int>(expr_parser::precedence::mul_div));
 				left = new expr_binary(*left, *right,
-					[](expr &left, expr &right, device &d){return left.eval(d) % right.eval(d);});
+					[](expr &left, expr &right, device &d, s8 &env)
+						{return left.eval(d, env) % right.eval(d, env);});
 			}
 
 			else
@@ -2366,6 +2545,7 @@ struct config : public initialized_helper
 			dev->set_destroyed();
 
 			std::vector<mapping::group*> groups;
+			std::unordered_map<std::string, uw> env;
 
 			bool failure = true;
 			raii res([&]()
@@ -2387,7 +2567,7 @@ struct config : public initialized_helper
 				while(g.has_next())
 				{
 					g = g.next();
-					if(!g.payload().is_object())
+					if(!g.payload().is_object() || g.payload().is_comment())
 						continue;
 
 					json jwhen = get(g.payload(), "when", json::t_string);
@@ -2410,14 +2590,14 @@ struct config : public initialized_helper
 					expr *d0 = null;
 					try
 					{
-						when = expr_parser::parse(jwhen.string(), *dev);
-						d0 = expr_parser::parse(jd0.string(), *dev);
+						when = expr_parser::parse(jwhen.string(), *dev, env);
+						d0 = expr_parser::parse(jd0.string(), *dev, env);
 					}
 					catch(std::string s)
 					{
 						std::cerr << "config: error while parsing 'when' or 'do' in '"
-							<< jname.string() << "' mapping. The error: " << s
-							<< " 'when': '" << jwhen.string() << "', 'do': '" << jd0.string()
+							<< jname.string() << "' mapping: \n\t" << s
+							<< " \n\t'when': '" << jwhen.string() << "' \n\t'do': '" << jd0.string()
 							<< "'." << std::endl;
 
 						delete when;
@@ -2450,7 +2630,7 @@ struct config : public initialized_helper
 				maps->erase(std::string(jname.string()));
 			}
 
-			maps->insert({{std::string(jname.string()), new mapping(groups)}});
+			maps->insert({{std::string(jname.string()), new mapping(groups, env.size())}});
 
 			delete dev;
 		}
@@ -2785,7 +2965,8 @@ int main(int argc, const char **argv)
 //	d.set_destroyed();
 //	d.readings[33].val = 1;
 //	d.readings[32].val = -2;
-
+//	std::unordered_map<std::string, uw> env_map;
+//	std::vector<s8> env;
 //	while(true)
 //	{
 //		std::cout << "> ";
@@ -2795,13 +2976,14 @@ int main(int argc, const char **argv)
 //			break;
 //		try
 //		{
-//			expr *ex = expr_parser::parse(in.c_str(), d);
-//			s8 r = ex->eval(d);
+//			expr *ex = expr_parser::parse(in.c_str(), d, env_map);
+//			while(env.size() != env_map.size())
+//				env.push_back(0);
+//			s8 r = ex->eval(d, env[0]);
 //			std::cout << r << std::endl;
 //			delete ex;
 //		}
 //		catch(std::string s) {std::cout << s << std::endl;}
-//		catch(const char *s) {std::cout << s << std::endl;}
 //	}
 
 //	exit(0);
