@@ -75,24 +75,24 @@ const char config_default[] = R"biteme!(
 		'masquerade': {'ref': 'ds4_usb_masq'},
 
 		'group':
-		{
-			'cond': {'when':'l1 != prev_l1', 'do':'print("--- l1\n")'},
-			'cond': {'when':'square', 'do':'0', 'greedy':true},
-			'cond': {
+		[
+			{'when':'l1 != prev_l1', 'do':'print("--- l1\n")'},
+			{'when':'square', 'do':'0', 'greedy':true},
+			{
 				'when':'stick_left_x != prev_stick_left_x | stick_left_y != prev_stick_left_y',
 				'do':'print("--- x: " + str(stick_left_x) + " y: " + str(stick_left_y) + "\n")'},
-			'cond': {'when':'l2_analog != prev_l2_analog', 'do': 'print("--- l2_analog: " + str(l2_analog) + "\n")'}
-		},
+			{'when':'l2_analog != prev_l2_analog', 'do': 'print("--- l2_analog: " + str(l2_analog) + "\n")'}
+		],
 
 		'group':
-		{
-			'cond': {'when':'l1 & l2 & l1=r1 & l2=r2', 'do':'print("--- l1=r1...\n")'}
-		},
+		[
+			{'when':'l1 & l2 & l1=r1 & l2=r2', 'do':'print("--- l1=r1...\n")'}
+		],
 
 		'group':
-		{
-			'cond': {'when':'battery != prev_battery | usb != prev_usb', 'do':'print("--- battery: " + str((battery*100) / (usb ? 11 : 9)) + "\n")'}
-		},
+		[
+			{'when':'battery != prev_battery | usb != prev_usb', 'do':'print("--- battery: " + str((battery*100) / (usb ? 11 : 9)) + "\n")'}
+		],
 
 		'comment':
 		{
@@ -2381,15 +2381,18 @@ struct config : public initialized_helper
 				});
 
 			json g;
-			while(!(g = get(m, "group", json::t_object, &m)).is_null())
+			while(!(g = get(m, "group", json::t_array, &m)).is_null())
 			{
 				std::vector<mapping::cond*> conds;
-				json c;
-				while(!(c = get(g, "cond", json::t_object, &g)).is_null())
+				while(g.has_next())
 				{
-					json jwhen = get(c, "when", json::t_string);
-					json jd0 = get(c, "do", json::t_string);
-					json jgreedy = get(c, "greedy", json::t_bool);
+					g = g.next();
+					if(!g.payload().is_object())
+						continue;
+
+					json jwhen = get(g.payload(), "when", json::t_string);
+					json jd0 = get(g.payload(), "do", json::t_string);
+					json jgreedy = get(g.payload(), "greedy", json::t_bool);
 
 					if(jwhen.is_null() || jd0.is_null()
 						|| !jwhen.string() || !jd0.string())
