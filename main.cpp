@@ -46,7 +46,7 @@ const char config_default[] = R"biteme!(
 	'comment': 'DualShock 4 over USB.',
 	'var': {'ds4_usb_masq':
 		{
-			'bus': 'BUS_USB', 'comment': "Actually this is ignored. It's always USB.",
+			'bus': 'BUS_USB', 'comment': 'Actually this is ignored. It is always USB.',
 			'vendor': 1356,
 			'product': 1476,
 			'version': 273
@@ -72,30 +72,46 @@ const char config_default[] = R"biteme!(
 		'comment': 'Pretend we are a real thing.',
 		'masquerade': {'ref': 'ds4_usb_masq'},
 
-		'group':
+		'//group':
 		[
 			{'when':'circle != prev_circle', 'do':'set($t timer());set($circle circle)'}
 		],
 
-		'group':
-		[
-			{'when':'l1 != prev_l1', 'do':'print("--- l1\n")'},
-			{'when':'square', 'do':'0', 'greedy':true},
-			{
-				'when':'stick_left_x != prev_stick_left_x | stick_left_y != prev_stick_left_y',
-				'do':'print("--- x: " + str(stick_left_x) + " y: " + str(stick_left_y) + "\n")'},
-			{'when':'l2_analog != prev_l2_analog', 'do': 'print("--- l2_analog: " + str(l2_analog) + "\n")'}
-		],
-
-		'group':
-		[
-			{'when':'l1 & l2 & l1=r1 & l2=r2', 'do':'print("--- l1=r1...\n")'}
-		],
-
-		'group':
+		'//group':
 		[
 			{'when':'triangle != prev_triangle', 'do':'post(EV_KEY BTN_X triangle);post(EV_SYN SYN_REPORT 0)'},
+			{'when':'set($v dpad_right) != prev_dpad_right', 'do':'post_syn(EV_KEY BTN_Z $v)'},
 			{'when':'set($v r1) != prev_r1', 'do':'post_syn(EV_KEY BTN_Z $v)'}
+		],
+
+		'group':
+		[
+			 {'when':'set($v cross)    != prev_cross',    'do':'post(EV_KEY BTN_B $v)'}
+			,{'when':'set($v circle)   != prev_circle',   'do':'post(EV_KEY BTN_C $v)'}
+			,{'when':'set($v square)   != prev_square',   'do':'post(EV_KEY BTN_A $v)'}
+			,{'when':'set($v triangle) != prev_triangle', 'do':'post(EV_KEY BTN_X $v)'}
+			,{'when':'set($v l1) != prev_l1', 'do':'post(EV_KEY BTN_Y $v)'}
+			,{'when':'set($v l2) != prev_l2', 'do':'post(EV_KEY BTN_TL $v)'}
+			,{'when':'set($v l3) != prev_l3', 'do':'post(EV_KEY BTN_SELECT $v)'}
+			,{'when':'set($v r1) != prev_r1', 'do':'post(EV_KEY BTN_Z $v)'}
+			,{'when':'set($v r2) != prev_r2', 'do':'post(EV_KEY BTN_TR $v)'}
+			,{'when':'set($v r3) != prev_r3', 'do':'post(EV_KEY BTN_START $v)'}
+			,{'when':'set($v share)    != prev_share',    'do':'post(EV_KEY BTN_TL2 $v)'}
+			,{'when':'set($v options)  != prev_options',  'do':'post(EV_KEY BTN_TR2 $v)'}
+			,{'when':'set($v ps)       != prev_ps',       'do':'post(EV_KEY BTN_MODE $v)'}
+			,{'when':'set($v trackpad) != prev_trackpad', 'do':'post(EV_KEY BTN_THUMBL $v)'}
+
+			,{'when':'dpad_left != prev_dpad_left | dpad_right != prev_dpad_right', 'do':'post(EV_ABS ABS_HAT0X (dpad_left ? -1 : (dpad_right ? 1 : 0)));print("--- dpad X: " + str((dpad_left ? -1 : (dpad_right ? 1 : 0))) + "\n")'}
+			,{'when':'dpad_up   != prev_dpad_up   | dpad_down  != prev_dpad_down',  'do':'post(EV_ABS ABS_HAT0Y (dpad_up   ? -1 : (dpad_down  ? 1 : 0)));print("--- dpad Y: " + str((dpad_up   ? -1 : (dpad_down  ? 1 : 0))) + "\n")'}
+
+			,{'when':'set($v stick_left_x)  != prev_stick_left_x',  'do':'post(EV_ABS ABS_X $v)'}
+			,{'when':'set($v stick_left_y)  != prev_stick_left_y',  'do':'post(EV_ABS ABS_Y $v)'}
+			,{'when':'set($v stick_right_x) != prev_stick_right_x', 'do':'post(EV_ABS ABS_Z $v)'}
+			,{'when':'set($v stick_right_y) != prev_stick_right_y', 'do':'post(EV_ABS ABS_RZ $v)'}
+			,{'when':'set($v l2_analog) != prev_l2_analog', 'do':'post(EV_ABS ABS_RX $v)'}
+			,{'when':'set($v r2_analog) != prev_r2_analog', 'do':'post(EV_ABS ABS_RY $v)'}
+
+			,{'when':'1', 'do':'post(EV_SYN SYN_REPORT 0)'}
 		],
 
 		'group':
@@ -103,17 +119,13 @@ const char config_default[] = R"biteme!(
 			{'when':'battery != prev_battery | usb != prev_usb', 'do':'print("--- battery: " + str((battery*100) / (usb ? 11 : 9)) + "\n")'}
 		],
 
-		'group':
+		'//group':
 		[
 			{'when':'$circle', 'do':'print("--- d: " + str(timer() - $t) + "\n")'}
 		],
 
 		'comment':
 		{
-			'when_do': ['l1=r1 & l2=r2', 'print("l1=r1...\n")'],
-			'when_do': ['l1 != l1', 'print("l1\n")'],
-			'when_do': ['battery < 20', 'print("battery < 20\n")'],
-			'when_do': ['l1 != l1', ['post', 'EV_KEY', 'BTN_Y', 'l1']],
 			'when_do': ['battery < 20', ['flash', 255, 0, 0, 5, 255]],
 			'when_do': ['l1=l1 & l2=l2',
 				['exec', 'echo "disconnect (%dev_mac%)" | bluetoothctl']]
@@ -851,7 +863,7 @@ struct myudev : public initialized_helper
 #include <libevdev/libevdev.h>
 #include <libevdev/libevdev-uinput.h>
 
-struct uinput
+struct uinput : public initialized_helper
 {
 	typedef int evdevt;
 
@@ -868,6 +880,154 @@ struct uinput
 	static bool valid(evdevt type_or_code)
 	{
 		return type_or_code != -1;
+	}
+
+	static bool valid(evdevt type, evdevt code)
+	{
+		return type != EV_SYN && code != SYN_REPORT;
+	}
+
+	myudev::dev_info devinfo;
+
+	int eventfd = -1;
+	libevdev *eventdev = null;
+
+	libevdev *virtdev = null;
+	libevdev_uinput *virti = null;
+
+	uinput()
+	{
+		;
+	}
+
+	uinput(myudev::dev_info devinfo)
+		: devinfo(devinfo)
+	{
+		;
+	}
+
+	bool init()
+	{
+		if(initialized() || destroyed())
+			return true;
+
+		if(!devinfo.event_node.size())
+			return false;
+
+		eventfd = open(devinfo.event_node.c_str(), O_RDONLY | O_NONBLOCK);
+		if(eventfd == -1)
+		{
+			std::cout << "Open eventfd: " << errno << " " << strerror(errno)
+				<< std::endl;
+
+			return false;
+		}
+
+		if(libevdev_new_from_fd(eventfd, &eventdev) < 0)
+			return false;
+
+		if(libevdev_grab(eventdev, LIBEVDEV_GRAB))
+			return false;
+
+		set_initialized();
+
+		return true;
+	}
+
+	void virt_new()
+	{
+		if(virtdev || virti)
+		{
+			verbose(std::cout << "virtdev || virti" << std::endl);
+
+			return;
+		}
+
+		virtdev = libevdev_new();
+
+		libevdev_set_name(virtdev, "Wireless Controller");
+	}
+
+	bool virt_init()
+	{
+		if(!virtdev || virti)
+		{
+			verbose(std::cout << "!virtdev || virti" << std::endl);
+
+			return false;
+		}
+
+		int e;
+		if(!(e = libevdev_uinput_create_from_device(virtdev
+			, LIBEVDEV_UINPUT_OPEN_MANAGED, &virti)))
+			return true;
+
+		return false;
+	}
+
+	void virt_destroy()
+	{
+		if(virti)
+			libevdev_uinput_destroy(virti), virti = null;
+
+		if(virtdev)
+			libevdev_free(virtdev), virtdev = null;
+	}
+
+	bool virt_enable_type(evdevt type)
+	{
+		if(!initialized() || destroyed() || !virtdev)
+			return false;
+
+		return libevdev_enable_event_type(virtdev, type) == 0;
+	}
+
+	bool virt_enable_code(evdevt type, evdevt code)
+	{
+		if(!initialized() || destroyed() || !virtdev)
+			return false;
+
+		return libevdev_enable_event_code(virtdev, type, code, null) == 0;
+	}
+
+	bool virt_post(evdevt type, evdevt code, evdevt value)
+	{
+		if(!initialized() || destroyed() || !virti)
+			return false;
+
+		return libevdev_uinput_write_event(virti, type, code, value) == 0;
+	}
+
+	void virt_syn()
+	{
+		virt_post(EV_SYN, SYN_REPORT, 0);
+	}
+
+	void destroy()
+	{
+		if(!initialized() || destroyed())
+			return;
+
+		set_destroyed();
+
+		virt_destroy();
+
+		if(eventdev)
+		{
+			libevdev_grab(eventdev, LIBEVDEV_UNGRAB);
+
+			libevdev_free(eventdev);
+
+			eventdev = null;
+		}
+
+		if(eventfd != -1)
+			close(eventfd), eventfd = -1;
+	}
+
+	~uinput()
+	{
+		destroy();
 	}
 };
 
@@ -963,8 +1123,11 @@ struct mapping : public initialized_helper
 
 	const uw env_size;
 
-	mapping(std::vector<group*> groups, uw env_size)
-		: groups(groups), env_size(env_size)
+	std::unordered_multimap<uinput::evdevt, uinput::evdevt> uins;
+
+	mapping(std::vector<group*> groups, uw env_size
+		, std::unordered_multimap<uinput::evdevt, uinput::evdevt> &uins)
+		: groups(groups), env_size(env_size), uins(uins)
 	{
 		set_initialized();
 	}
@@ -986,8 +1149,11 @@ struct device : public initialized_helper
 {
 	myudev::dev_info devinfo;
 
+	uinput uin;
+
 	std::vector<mapping*> mappings;
-	mapping *current_mapping = null;
+	sw current_mapping = -1;
+
 	s8 *expr_env = null;
 
 	device()
@@ -999,13 +1165,7 @@ struct device : public initialized_helper
 	device(myudev::dev_info devinfo, std::vector<mapping*> &mappings)
 		: devinfo(devinfo), mappings(mappings)
 	{
-		if(mappings.size())
-		{
-			current_mapping = mappings[0];
-
-			expr_env = new s8[current_mapping->env_size];
-			std::memset((void*)expr_env, 0, current_mapping->env_size * sizeof(s8));
-		}
+		;
 	}
 
 	virtual bool init() = 0;
@@ -1041,15 +1201,82 @@ struct device : public initialized_helper
 
 	virtual void readings_read() = 0;
 
-	void tick()
+	void init_mapping()
 	{
-		readings_read();
-
-		if(!current_mapping || !current_mapping->groups.size())
+		if(!mappings.size())
 			return;
 
-		mapping::group **g = &current_mapping->groups[0];
-		for(uw i = 0; i < current_mapping->groups.size(); i++)
+		uin.virt_new();
+
+		for(const auto &i : mappings[current_mapping]->uins)
+			uin.virt_enable_type(i.first), uin.virt_enable_code(i.first, i.second);
+
+		if(!uin.virt_init())
+		{
+			verbose(std::cout << "!virt_init()" << std::endl);
+
+			disable_mapping();
+
+			current_mapping = -1;
+
+			return;
+		}
+
+		expr_env = new s8[mappings[current_mapping]->env_size];
+		std::memset((void*)expr_env, 0, mappings[current_mapping]->env_size * sizeof(s8));
+	}
+
+	void disable_mapping()
+	{
+		if(!mappings.size() || current_mapping == -1)
+			return;
+
+		uin.virt_destroy();
+
+		delete[] expr_env, expr_env = null;
+	}
+
+	void next_mapping()
+	{
+		if(!mappings.size())
+			return;
+
+		disable_mapping();
+
+		++current_mapping;
+		if(current_mapping >= mappings.size())
+			current_mapping = 0;
+
+		init_mapping();
+	}
+
+	void prev_mapping()
+	{
+		if(!mappings.size())
+			return;
+
+		disable_mapping();
+
+		--current_mapping;
+		if(current_mapping < 0)
+			current_mapping = 0;
+
+		init_mapping();
+	}
+
+	void tick()
+	{
+		if(current_mapping < 0)
+			return;
+
+		readings_read();
+
+		mapping *map = mappings[current_mapping];
+		if(!map || !map->groups.size())
+			return;
+
+		mapping::group **g = &map->groups[0];
+		for(uw i = 0; i < map->groups.size(); i++)
 		{
 			mapping::cond **c = &g[i]->conditions[0];
 			for(uw j = 0; j < g[i]->conditions.size(); j++)
@@ -1070,9 +1297,8 @@ struct device : public initialized_helper
 
 		set_destroyed();
 
-		current_mapping = null;
-
-		delete[] expr_env, expr_env = null;
+		disable_mapping();
+		current_mapping = -1;
 	}
 
 	virtual ~device()
@@ -1084,9 +1310,14 @@ struct device : public initialized_helper
 //
 struct ds4_device : public device
 {
+	static bool is_ds4(int vid, int pid, const char *name)
+	{
+		(void)name;
+
+		return vid == 0x054C && pid == 0x05C4;
+	}
+
 	int devfd = -1;
-	int eventfd = -1;
-	libevdev *eventdev = null;
 
 	// I honestly did try to do this "more" in compile time,
 	// making device a variadic base data type and avoiding using macros.
@@ -1129,7 +1360,8 @@ struct ds4_device : public device
 		{"usb", [](const byte *const buf){return (buf[30] & 16) != 0;}},
 	};
 
-	ds4_device() : device()
+	ds4_device()
+		: device()
 	{
 		;
 	}
@@ -1213,20 +1445,11 @@ struct ds4_device : public device
 			return false;
 		}
 
-		eventfd = open(devinfo.event_node.c_str(), O_RDONLY | O_NONBLOCK);
-		if(eventfd == -1)
-		{
-			std::cout << "Open eventfd: " << errno << " " << strerror(errno)
-				<< std::endl;
-
-			return false;
-		}
-
-		if(libevdev_new_from_fd(eventfd, &eventdev) < 0)
+		uin = uinput(devinfo);
+		if(!uin.init())
 			return false;
 
-		if(libevdev_grab(eventdev, LIBEVDEV_GRAB))
-			return false;
+		next_mapping();
 
 		set_initialized();
 
@@ -1320,20 +1543,10 @@ struct ds4_device : public device
 		verbose(std::cout << "ds4_device.destroy() of " << devinfo.dev_node
 			<< std::endl);
 
+		uin.destroy();
+
 		if(devfd != -1)
 			close(devfd), devfd = -1;
-
-		if(eventdev)
-		{
-			libevdev_grab(eventdev, LIBEVDEV_UNGRAB);
-
-			libevdev_free(eventdev);
-
-			eventdev = null;
-		}
-
-		if(eventfd != -1)
-			close(eventfd), eventfd = -1;
 
 		device::destroy();
 	}
@@ -1341,13 +1554,6 @@ struct ds4_device : public device
 	virtual ~ds4_device()
 	{
 		destroy();
-	}
-
-	static bool is_ds4(int vid, int pid, const char *name)
-	{
-		(void)name;
-
-		return vid == 0x054C && pid == 0x05C4;
 	}
 };
 
@@ -1533,9 +1739,10 @@ struct expr_parser
 	};
 
 	static expr* parse(const char *input, device &dev
-		, std::unordered_map<std::string, uw> &env)
+		, std::unordered_map<std::string, uw> &env
+		, std::unordered_multimap<uinput::evdevt, uinput::evdevt> *uins = null)
 	{
-		return expr_parser(input, dev, env).parse();
+		return expr_parser(input, dev, env, uins).parse();
 	}
 
 	const char *input;
@@ -1543,12 +1750,14 @@ struct expr_parser
 
 	device &dev;
 	std::unordered_map<std::string, uw> &env;
+	std::unordered_multimap<uinput::evdevt, uinput::evdevt> *uins;
 
 	uw lex_idx = 0;
 
 	expr_parser(const char *input, device &dev
-		, std::unordered_map<std::string, uw> &env)
-		: input(input), input_len(std::strlen(input)), dev(dev), env(env)
+		, std::unordered_map<std::string, uw> &env
+		, std::unordered_multimap<uinput::evdevt, uinput::evdevt> *uins = null)
+		: input(input), input_len(std::strlen(input)), dev(dev), env(env), uins(uins)
 	{
 		;
 	}
@@ -1908,18 +2117,21 @@ struct expr_parser
 						throw
 							std::string("expr_parser: call to post(type code value): expected 3 arguments.");
 
+					if(uins && uinput::valid(type, code))
+						uins->insert({{type, code}});
+
 					if(name.compare("post_syn"))
 						f->f =
 							[type, code](expr *arr[], device &d, s8 &env)
 							{
-								return libevdev_uinput_write_event(0, type, code, arr[0]->eval(d, env)) == 0 ? 1 : 0;
+								return d.uin.virt_post(type, code, arr[0]->eval(d, env));
 							};
 					else
 						f->f =
 							[type, code](expr *arr[], device &d, s8 &env)
 							{
-								bool r = libevdev_uinput_write_event(0, type, code, arr[0]->eval(d, env)) == 0 ? 1 : 0;
-								libevdev_uinput_write_event(0, EV_SYN, SYN_REPORT, 0);
+								bool r = d.uin.virt_post(type, code, arr[0]->eval(d, env));
+								d.uin.virt_syn();
 
 								return r;
 							};
@@ -2546,6 +2758,7 @@ struct config : public initialized_helper
 
 			std::vector<mapping::group*> groups;
 			std::unordered_map<std::string, uw> env;
+			std::unordered_multimap<uinput::evdevt, uinput::evdevt> uins;
 
 			bool failure = true;
 			raii res([&]()
@@ -2590,8 +2803,8 @@ struct config : public initialized_helper
 					expr *d0 = null;
 					try
 					{
-						when = expr_parser::parse(jwhen.string(), *dev, env);
-						d0 = expr_parser::parse(jd0.string(), *dev, env);
+						when = expr_parser::parse(jwhen.string(), *dev, env, &uins);
+						d0 = expr_parser::parse(jd0.string(), *dev, env, &uins);
 					}
 					catch(std::string s)
 					{
@@ -2630,7 +2843,8 @@ struct config : public initialized_helper
 				maps->erase(std::string(jname.string()));
 			}
 
-			maps->insert({{std::string(jname.string()), new mapping(groups, env.size())}});
+			maps->insert(
+				{{std::string(jname.string()), new mapping(groups, env.size(), uins)}});
 
 			delete dev;
 		}
